@@ -1,0 +1,29 @@
+# 本機秘密與環境
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 工具／IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# 僅排除「倉庫根目錄」的筆記、匯出與一次性檔案（Python 專案仍會被加入）
+/*.md
+/patch_*.json
+/archive_ids_clean.txt
+/extract_utf8.txt
+/notion_extract.txt
