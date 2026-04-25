@@ -13,7 +13,7 @@ from financial_news.models import NewsItem
 from financial_news.sources.base import NewsSource
 from financial_news.sources.cnyes import CnyesPopularSource
 from financial_news.sources.rss_feed import RssFeedSource
-from financial_news.utils import setup_logger
+from financial_news.utils import setup_logger, strip_html
 
 logger = setup_logger(__name__)
 
@@ -23,7 +23,13 @@ def build_sources() -> List[NewsSource]:
     if settings.cnyes_enabled:
         sources.append(CnyesPopularSource(category=settings.cnyes_category))
     if settings.rss_enabled and settings.rss_feed_urls:
-        sources.append(RssFeedSource(settings.rss_feed_urls))
+        sources.append(
+            RssFeedSource(
+                settings.rss_feed_urls,
+                items_per_feed=settings.rss_items_per_feed,
+                max_total_items=settings.rss_max_total,
+            )
+        )
     return sources
 
 
@@ -37,7 +43,12 @@ def _format_block(source: NewsSource, items: List[NewsItem], ts: str) -> str:
         lines.append("（本輪無可用項目）")
         return "\n".join(lines)
     for i, it in enumerate(items, 1):
-        lines.append(f"{i}. {it.title}")
+        if it.region and it.outlet:
+            head = f"{i}. [{it.region}｜{it.outlet}]"
+        else:
+            head = f"{i}. [{it.source_label}]"
+        lines.append(head)
+        lines.append(f"   {strip_html(it.title)}")
         lines.append(f"   {it.url}")
         lines.append("")
     return "\n".join(lines).rstrip()
