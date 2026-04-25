@@ -21,8 +21,9 @@ def _load_rss_urls_from_catalog(path: Path) -> list[str]:
         return []
     if not isinstance(data, dict):
         return []
-    urls: list[str] = []
-    for raw_url, meta in data.items():
+    weighted_urls: list[tuple[int, int, str]] = []
+    priority_rank = {"high": 0, "medium": 1, "low": 2}
+    for idx, (raw_url, meta) in enumerate(data.items()):
         if not isinstance(raw_url, str):
             continue
         url = raw_url.strip()
@@ -33,8 +34,12 @@ def _load_rss_urls_from_catalog(path: Path) -> list[str]:
         if isinstance(meta, dict) and "enabled" in meta:
             enabled = bool(meta.get("enabled"))
         if enabled:
-            urls.append(url)
-    return urls
+            priority = "medium"
+            if isinstance(meta, dict):
+                priority = str(meta.get("priority", "medium")).strip().lower()
+            weighted_urls.append((priority_rank.get(priority, 1), idx, url))
+    weighted_urls.sort(key=lambda x: (x[0], x[1]))
+    return [u for _, _, u in weighted_urls]
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
