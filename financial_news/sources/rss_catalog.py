@@ -38,8 +38,8 @@ def _raw_catalog() -> Dict[str, Any]:
         return {}
 
 
-def rss_feed_meta(feed_url: str) -> Tuple[Optional[str], Optional[str], str]:
-    """回傳 (region, outlet, source_label)。
+def rss_feed_meta(feed_url: str) -> Tuple[Optional[str], Optional[str], str, Optional[str]]:
+    """回傳 (region, outlet, source_label, priority)。
 
     若 catalog 無此 URL，region/outlet 為 None，source_label 為簡易 host 標籤。
     """
@@ -58,6 +58,7 @@ def rss_feed_meta(feed_url: str) -> Tuple[Optional[str], Optional[str], str]:
     if isinstance(meta, dict):
         region = (meta.get("region") or "").strip() or None
         outlet = (meta.get("outlet") or "").strip() or None
+        priority = (meta.get("priority") or "").strip().lower() or "medium"
         if region and outlet:
-            return region, outlet, f"{region} · {outlet}"
-    return None, None, _feed_label_fallback(url)
+            return region, outlet, f"{region} · {outlet}", priority
+    return None, None, _feed_label_fallback(url), None

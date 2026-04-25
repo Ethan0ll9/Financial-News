@@ -18,6 +18,19 @@ from financial_news.utils import setup_logger, strip_html
 logger = setup_logger(__name__)
 
 
+def _priority_tag(priority: str | None) -> str:
+    if not priority:
+        return ""
+    p = priority.strip().lower()
+    if p == "high":
+        return "[H] "
+    if p == "medium":
+        return "[M] "
+    if p == "low":
+        return "[L] "
+    return ""
+
+
 def build_sources() -> List[NewsSource]:
     sources: List[NewsSource] = []
     if settings.cnyes_enabled:
@@ -43,10 +56,11 @@ def _format_block(source: NewsSource, items: List[NewsItem], ts: str) -> str:
         lines.append("（本輪無可用項目）")
         return "\n".join(lines)
     for i, it in enumerate(items, 1):
+        ptag = _priority_tag(it.priority)
         if it.region and it.outlet:
-            head = f"{i}. [{it.region}｜{it.outlet}]"
+            head = f"{i}. {ptag}[{it.region}｜{it.outlet}]"
         else:
-            head = f"{i}. [{it.source_label}]"
+            head = f"{i}. {ptag}[{it.source_label}]"
         lines.append(head)
         lines.append(f"   {strip_html(it.title)}")
         lines.append(f"   {it.url}")

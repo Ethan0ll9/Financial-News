@@ -15,8 +15,15 @@ from financial_news.utils import setup_logger, strip_html
 logger = setup_logger(__name__)
 
 HEADERS = {
-    "User-Agent": "Financial-NewsDigest/1.0 (+https://github.com/)",
-    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    # 使用較接近瀏覽器的請求標頭，可降低部分站點（如 HKET）403 機率
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.8",
+    "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+    "Referer": "https://www.google.com/",
 }
 
 
@@ -68,7 +75,7 @@ class RssFeedSource(NewsSource):
                 getattr(parsed, "bozo_exception", ""),
             )
 
-        region, outlet, source_label = rss_feed_meta(url)
+        region, outlet, source_label, priority = rss_feed_meta(url)
         out: List[NewsItem] = []
         for entry in parsed.entries[:max_entries]:
             title = (entry.get("title") or "").strip()
@@ -82,6 +89,7 @@ class RssFeedSource(NewsSource):
                     source_label=source_label,
                     region=region,
                     outlet=outlet,
+                    priority=priority,
                 )
             )
         return out

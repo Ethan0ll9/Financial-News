@@ -12,3 +12,4 @@ class NewsItem:
     source_label: str
     region: Optional[str] = None
     outlet: Optional[str] = None
+    priority: Optional[str] = None
