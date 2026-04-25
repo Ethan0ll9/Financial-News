@@ -21,7 +21,20 @@ def _load_rss_urls_from_catalog(path: Path) -> list[str]:
         return []
     if not isinstance(data, dict):
         return []
-    return [u.strip() for u in data.keys() if isinstance(u, str) and u.strip()]
+    urls: list[str] = []
+    for raw_url, meta in data.items():
+        if not isinstance(raw_url, str):
+            continue
+        url = raw_url.strip()
+        if not url:
+            continue
+        # 預設視為啟用；可在 catalog 設定 enabled=false 臨時停用問題來源
+        enabled = True
+        if isinstance(meta, dict) and "enabled" in meta:
+            enabled = bool(meta.get("enabled"))
+        if enabled:
+            urls.append(url)
+    return urls
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
