@@ -96,6 +96,102 @@ class Settings:
 
         self.run_on_start = _bool_env("RUN_ON_START", False)
 
+        # 台股盤前／盤後簡報（FinMind + TWSE／FinMind 公告）
+        self.finmind_token = os.getenv("FINMIND_TOKEN", "").strip()
+        self.tw_briefing_enabled = _bool_env("TW_BRIEFING_ENABLED", False)
+        _state = os.getenv("TW_STATE_DIR", "data/briefing_state").strip() or "data/briefing_state"
+        self.tw_state_dir = Path(_state)
+        if not self.tw_state_dir.is_absolute():
+            self.tw_state_dir = _REPO_ROOT / self.tw_state_dir
+
+        self.tw_top_turnover_n = int(os.getenv("TW_TOP_TURNOVER_N", "12"))
+        if self.tw_top_turnover_n < 1:
+            self.tw_top_turnover_n = 1
+        if self.tw_top_turnover_n > 50:
+            self.tw_top_turnover_n = 50
+
+        self.tw_top_sector_k = int(os.getenv("TW_TOP_SECTOR_K", "3"))
+        if self.tw_top_sector_k < 1:
+            self.tw_top_sector_k = 1
+        if self.tw_top_sector_k > 10:
+            self.tw_top_sector_k = 10
+
+        self.tw_sector_leaders_per_industry = int(
+            os.getenv("TW_SECTOR_LEADERS_PER_INDUSTRY", "3")
+        )
+        if self.tw_sector_leaders_per_industry < 1:
+            self.tw_sector_leaders_per_industry = 1
+        if self.tw_sector_leaders_per_industry > 10:
+            self.tw_sector_leaders_per_industry = 10
+
+        self.tw_weekly_briefing_only_monday = _bool_env("TW_WEEKLY_BRIEFING_ONLY_MONDAY", True)
+        # FinMind TaiwanStockPrice：加權指數請用 TAIEX（IX0001 常回空）
+        self.tw_index_stock_id = os.getenv("TW_INDEX_STOCK_ID", "TAIEX").strip() or "TAIEX"
+        _default_proxies = (
+            # 半導體 / IC 設計 / 封測 / 矽晶圓
+            "2330,2454,3034,3711,5347,6488,"
+            # 電子下游 / 伺服器 / PC / NB
+            "2317,2382,3231,2357,2353,3017,3661,"
+            # 電子零組件 / 被動 / 儀器
+            "2308,2327,2360,"
+            # 面板 / 光電
+            "2409,3481,5469,"
+            # 網通 / 其他電子
+            "2345,3037,3702,"
+            # 金融保險
+            "2881,2882,2884,2885,2886,2891,2892,"
+            # 塑化
+            "1301,1303,1326,6505,"
+            # 鋼鐵 / 機電
+            "2002,1504,"
+            # 航運
+            "2603,2609,2615,"
+            # 食品 / 紡織 / 傳產
+            "1216,1402,9910,"
+            # 電信
+            "2412,4904,3045,"
+            # 生技 / 化學
+            "1722,6446"
+        )
+        _proxies = os.getenv("TW_MARKET_PROXY_STOCKS", _default_proxies)
+        self.tw_market_proxy_stocks = [s.strip() for s in _proxies.split(",") if s.strip()]
+        self.tw_non_trading_notify = _bool_env("TW_NON_TRADING_NOTIFY", False)
+        self.tw_weekly_events_max_per_day = int(os.getenv("TW_WEEKLY_EVENTS_MAX_PER_DAY", "5"))
+        if self.tw_weekly_events_max_per_day < 1:
+            self.tw_weekly_events_max_per_day = 1
+        if self.tw_weekly_events_max_per_day > 20:
+            self.tw_weekly_events_max_per_day = 20
+
+        # 視覺化與推送
+        self.imgbb_api_key = os.getenv("IMGBB_API_KEY", "").strip()
+        _report_dir = os.getenv("TW_REPORT_DIR", "data/briefing_report").strip() or "data/briefing_report"
+        self.tw_report_dir = Path(_report_dir)
+        if not self.tw_report_dir.is_absolute():
+            self.tw_report_dir = _REPO_ROOT / self.tw_report_dir
+
+        # push_mode: visual（預設）→ 圖片 + Flex 卡；若上傳失敗自動降級為 text
+        #           text           → 仍走舊的純文字摘要
+        mode = os.getenv("TW_PUSH_MODE", "visual").strip().lower()
+        self.tw_push_mode = mode if mode in ("visual", "text") else "visual"
+
+        self.tw_hot_themes_k = int(os.getenv("TW_HOT_THEMES_K", "4"))
+        if self.tw_hot_themes_k < 1:
+            self.tw_hot_themes_k = 1
+        if self.tw_hot_themes_k > 10:
+            self.tw_hot_themes_k = 10
+
+        self.tw_hot_gainers_n = int(os.getenv("TW_HOT_GAINERS_N", "8"))
+        if self.tw_hot_gainers_n < 1:
+            self.tw_hot_gainers_n = 1
+        if self.tw_hot_gainers_n > 30:
+            self.tw_hot_gainers_n = 30
+
+        self.tw_hot_losers_n = int(os.getenv("TW_HOT_LOSERS_N", "5"))
+        if self.tw_hot_losers_n < 1:
+            self.tw_hot_losers_n = 1
+        if self.tw_hot_losers_n > 30:
+            self.tw_hot_losers_n = 30
+
         self._validate()
 
     def _validate(self) -> None:

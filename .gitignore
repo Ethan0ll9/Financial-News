@@ -1,6 +1,12 @@
 # 本機秘密與環境
 .env
 
+# 台股執行時寫入的 state 與報告
+/data
+
+# 測試程式與資料
+/tests
+
 # Python
 __pycache__/
 *.py[cod]

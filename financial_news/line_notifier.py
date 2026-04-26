@@ -1,7 +1,7 @@
-"""LINE Messaging API push（精簡版，僅文字）。"""
+"""LINE Messaging API push：文字、圖片、Flex。"""
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 import requests
 
@@ -11,8 +11,8 @@ logger = setup_logger(__name__)
 
 PUSH_MESSAGE_URL = "https://api.line.me/v2/bot/message/push"
 
-# 單則文字訊息上限約 5000，保留緩衝
 MAX_TEXT_LEN = 4500
+_MAX_MESSAGES_PER_PUSH = 5
 
 
 class LineNotifier:
@@ -34,11 +34,46 @@ class LineNotifier:
         chunks = _split_text(text, MAX_TEXT_LEN)
         ok = True
         for chunk in chunks:
-            if not self._push_messages([{"type": "text", "text": chunk}]):
+            if not self._push([{"type": "text", "text": chunk}]):
                 ok = False
         return ok
 
-    def _push_messages(self, messages: List[dict]) -> bool:
+    def push_image(self, image_url: str, preview_url: Optional[str] = None) -> bool:
+        if not image_url:
+            return False
+        msg = {
+            "type": "image",
+            "originalContentUrl": image_url,
+            "previewImageUrl": preview_url or image_url,
+        }
+        return self._push([msg])
+
+    def push_flex(self, contents: dict, alt_text: str) -> bool:
+        msg = {
+            "type": "flex",
+            "altText": alt_text[:400] if alt_text else "台股簡報",
+            "contents": contents,
+        }
+        return self._push([msg])
+
+    def push_messages(self, messages: List[dict]) -> bool:
+        """可混合多種訊息（text/image/flex）合併送出；>5 則會分批。"""
+        if not messages:
+            return True
+        if not self._token or not self._user_id:
+            logger.error("LINE 設定不完整，略過發送")
+            return False
+        ok = True
+        for i in range(0, len(messages), _MAX_MESSAGES_PER_PUSH):
+            chunk = messages[i : i + _MAX_MESSAGES_PER_PUSH]
+            if not self._push(chunk):
+                ok = False
+        return ok
+
+    def _push(self, messages: List[dict]) -> bool:
+        if not self._token or not self._user_id:
+            logger.error("LINE 設定不完整，略過發送")
+            return False
         try:
             resp = requests.post(
                 PUSH_MESSAGE_URL,
@@ -49,7 +84,7 @@ class LineNotifier:
             if resp.status_code == 200:
                 logger.info("LINE push 成功（%d 則訊息區塊）", len(messages))
                 return True
-            logger.error("LINE push 失敗: %s %s", resp.status_code, resp.text)
+            logger.error("LINE push 失敗: %s %s", resp.status_code, resp.text[:300])
             return False
         except requests.RequestException as e:
             logger.error("LINE push 例外: %s", e)
