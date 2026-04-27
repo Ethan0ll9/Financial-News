@@ -119,7 +119,7 @@ def run_morning_sequence(*, force_premarket: bool = False) -> None:
 
 
 def run_postmarket_briefing(*, force: bool = False) -> None:
-    """13:45：台股盤後總結。"""
+    """盤後台股總結（時間以 settings.tw_postmarket_hour/minute 為準）。"""
     if not settings.tw_briefing_enabled:
         logger.info("TW_BRIEFING_ENABLED=false，略過盤後排程")
         return
@@ -134,7 +134,7 @@ def run_postmarket_briefing(*, force: bool = False) -> None:
 
 
 class NewsScheduler:
-    """每日 08:00 晨間序列、20:00 digest、13:45 台股盤後（Asia/Taipei）。"""
+    """每日 08:00 晨間序列、20:00 digest、盤後台股總結（依 .env 設定，Asia/Taipei）。"""
 
     def __init__(self) -> None:
         self._sched = BlockingScheduler()
@@ -154,15 +154,20 @@ class NewsScheduler:
             name="財經新聞 digest（晚間）",
             replace_existing=True,
         )
+        post_hour = settings.tw_postmarket_hour
+        post_minute = settings.tw_postmarket_minute
         self._sched.add_job(
             run_postmarket_briefing,
-            CronTrigger(hour=13, minute=45, timezone="Asia/Taipei"),
+            CronTrigger(hour=post_hour, minute=post_minute, timezone="Asia/Taipei"),
             id="tw_postmarket_briefing",
             name="台股盤後總結",
             replace_existing=True,
         )
         logger.info(
-            "排程已註冊：08:00 晨間 digest+盤前、20:00 digest、13:45 盤後（Asia/Taipei）"
+            "排程已註冊：08:00 晨間 digest+盤前、20:00 digest、%02d:%02d 盤後（Asia/Taipei；"
+            "FinMind 官方 17:30 公布當日 K 線，實測 14:00 後通常可用，搭配重試機制）",
+            post_hour,
+            post_minute,
         )
         if settings.run_on_start:
             logger.info("RUN_ON_START=true，立即執行一次晨間序列")

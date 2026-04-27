@@ -18,16 +18,28 @@ def stock_bars(client: FinMindClient, stock_id: str, end: date, n: int = 2) -> L
     return client.bars_on_or_before(stock_id, end, n=n, lookback_calendar_days=45)
 
 
+def has_bar_on(bars: List[IndexBar], ref: date) -> bool:
+    """檢查 bars 最後一筆是否就是 ``ref`` 當日（用於嚴格驗日）。"""
+    if not bars:
+        return False
+    last_day = (bars[-1].day or "").strip()
+    return last_day == ref.isoformat()
+
+
 def weighted_index_bars(
     client: FinMindClient,
     configured_id: str,
     ref: date,
     *,
     n: int = 2,
+    strict_today: bool = False,
 ) -> tuple[List[IndexBar], str]:
     """加權指數日線（TaiwanStockPrice）。
 
     FinMind 對 ``IX0001`` 常回空列，實務請用 ``TAIEX``；此處先試 env 設定再試 ``TAIEX``。
+
+    ``strict_today=True`` 時，只接受最後一筆 ``day == ref`` 的資料；否則回傳空列，避免
+    在 FinMind 當日資料尚未公布（每天 17:30）時，誤把上一交易日的 K 線當作今日報告。
     """
     configured = (configured_id or "").strip()
     candidates: List[str] = []
@@ -38,6 +50,8 @@ def weighted_index_bars(
         candidates = ["TAIEX"]
 
     first = True
+    last_seen_bars: List[IndexBar] = []
+    last_seen_sid = candidates[0]
     for sid in candidates:
         bars = stock_bars(client, sid, ref, n=n)
         if bars:
@@ -47,9 +61,22 @@ def weighted_index_bars(
                     sid,
                     configured or "（未設定）",
                 )
+            if strict_today and not has_bar_on(bars, ref):
+                logger.warning(
+                    "加權指數 %s 最近一筆為 %s，非今日 %s；strict_today 模式下視為未公布",
+                    sid,
+                    bars[-1].day,
+                    ref.isoformat(),
+                )
+                last_seen_bars = bars
+                last_seen_sid = sid
+                first = False
+                continue
             return bars, sid
         first = False
-    return [], candidates[0]
+    if strict_today:
+        return [], candidates[0]
+    return last_seen_bars, last_seen_sid
 
 
 @dataclass(frozen=True)
@@ -101,9 +128,13 @@ def _one_proxy_stat(
     sid: str,
     ref: date,
     meta_map: Dict[str, StockMeta],
+    *,
+    strict_today: bool = False,
 ) -> Optional[ProxyStat]:
     bars = stock_bars(client, sid, ref, n=2)
     if not bars:
+        return None
+    if strict_today and not has_bar_on(bars, ref):
         return None
     b = bars[-1]
     p: Optional[float] = None
@@ -127,13 +158,22 @@ def gather_proxy_stats(
     meta_map: Dict[str, StockMeta],
     *,
     max_workers: int = 6,
+    strict_today: bool = False,
 ) -> List[ProxyStat]:
-    """對 proxy 清單平行抓取當日／T-1 K 線，彙整為 ProxyStat 列表（已濾除無資料者）。"""
+    """對 proxy 清單平行抓取當日／T-1 K 線，彙整為 ProxyStat 列表（已濾除無資料者）。
+
+    ``strict_today=True``：僅保留最後一筆 K 線 day == ref 的 proxy；其他全部丟棄。
+    """
     if not proxy_ids:
         return []
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         results = list(
-            ex.map(lambda s: _one_proxy_stat(client, s, ref, meta_map), proxy_ids)
+            ex.map(
+                lambda s: _one_proxy_stat(
+                    client, s, ref, meta_map, strict_today=strict_today
+                ),
+                proxy_ids,
+            )
         )
     return [r for r in results if r is not None]
 

@@ -1,8 +1,9 @@
 """盤後走勢總結：組資料 → PNG / HTML / Flex；從盤前 state 做事件驗證。"""
 from __future__ import annotations
 
+import time
 from datetime import date, datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from config.settings import Settings
@@ -93,7 +94,32 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
         logger.warning("%s 非交易日，force=True 仍產製盤後（測試）", today)
 
     prev = cal.previous_trading_day(today)
-    idx_bars, idx_id = weighted_index_bars(client, settings.tw_index_stock_id, today, n=2)
+
+    # 嚴格驗日：在實際交易日才啟用；force 跑非交易日測試時關閉，避免怎麼試都跑不完。
+    strict_today = settings.tw_postmarket_strict_today and not (force and is_non_trading)
+
+    idx_bars, idx_id = _fetch_index_with_retry(
+        client=client,
+        configured_id=settings.tw_index_stock_id,
+        today=today,
+        strict_today=strict_today,
+        max_retries=settings.tw_postmarket_max_retries,
+        retry_interval_min=settings.tw_postmarket_retry_interval_min,
+    )
+
+    if strict_today and not idx_bars:
+        msg = (
+            f"⏳ 台股盤後總結\n\n"
+            f"{today.isoformat()} 加權指數當日 K 線尚未由 FinMind 公布"
+            f"（官方更新時間 17:30）。\n"
+            f"已重試 {settings.tw_postmarket_max_retries} 次（每次間隔 "
+            f"{settings.tw_postmarket_retry_interval_min} 分鐘）仍無資料，本次略過。\n"
+            f"如需更晚的排程時間，請調整 .env：TW_POSTMARKET_HOUR / TW_POSTMARKET_MINUTE。"
+        )
+        notifier.push_text_chunks(msg)
+        logger.warning("盤後：今日 idx_bars 重試後仍未取得，已通知並結束")
+        return
+
     prev_close: Optional[float] = None
     if len(idx_bars) >= 2:
         prev_close = idx_bars[-2].close
@@ -109,7 +135,13 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
     )
 
     meta_map = stock_meta_map(client)
-    proxy_stats = gather_proxy_stats(client, today, settings.tw_market_proxy_stocks, meta_map)
+    proxy_stats = gather_proxy_stats(
+        client,
+        today,
+        settings.tw_market_proxy_stocks,
+        meta_map,
+        strict_today=strict_today,
+    )
     digest = build_market_digest(
         proxy_stats,
         hot_themes_k=settings.tw_hot_themes_k,
@@ -269,6 +301,43 @@ def _push_visual(
         messages.append({"type": "text", "text": tail_text[:4500]})
 
     return notifier.push_messages(messages)
+
+
+def _fetch_index_with_retry(
+    *,
+    client: FinMindClient,
+    configured_id: str,
+    today: date,
+    strict_today: bool,
+    max_retries: int,
+    retry_interval_min: int,
+) -> Tuple[list, str]:
+    """嘗試取當日加權指數 K 線；strict 模式下若無當日資料則重試。
+
+    回傳 ``(bars, idx_id)``：
+    - 非 strict：取最後可用的 K 線（可能是上一交易日，向下相容舊行為）。
+    - strict：必拿 ``day == today`` 的 K 線；重試耗盡仍無則回傳空列。
+    """
+    attempts = max(1, max_retries + 1) if strict_today else 1
+    bars: list = []
+    idx_id = ""
+    for i in range(attempts):
+        bars, idx_id = weighted_index_bars(
+            client, configured_id, today, n=2, strict_today=strict_today
+        )
+        if bars or not strict_today:
+            return bars, idx_id
+        if i + 1 >= attempts:
+            break
+        wait_sec = max(1, retry_interval_min) * 60
+        logger.warning(
+            "盤後：當日 K 線尚未公布，第 %d/%d 次重試將於 %d 秒後執行",
+            i + 1,
+            attempts - 1,
+            wait_sec,
+        )
+        time.sleep(wait_sec)
+    return bars, idx_id
 
 
 def _build_text_fallback(

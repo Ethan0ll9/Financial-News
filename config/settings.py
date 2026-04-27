@@ -192,6 +192,34 @@ class Settings:
         if self.tw_hot_losers_n > 30:
             self.tw_hot_losers_n = 30
 
+        # 盤後排程：FinMind TaiwanStockPrice 官方標示「星期一至五 17:30 更新」，
+        # 但實測收盤後 ~14:00 多半已可拿到當日 K 線；故預設 14:00 + 開啟重試以防延遲。
+        # 可由 .env 覆寫。
+        self.tw_postmarket_hour = int(os.getenv("TW_POSTMARKET_HOUR", "14"))
+        if not 0 <= self.tw_postmarket_hour <= 23:
+            self.tw_postmarket_hour = 14
+        self.tw_postmarket_minute = int(os.getenv("TW_POSTMARKET_MINUTE", "0"))
+        if not 0 <= self.tw_postmarket_minute <= 59:
+            self.tw_postmarket_minute = 0
+
+        # 嚴格驗日：取到的 idx_bars 最後一筆若不是 ref（today），是否視為「未公布」
+        # 預設 True（FinMind 延遲時不要產生穿著今日衣服的舊資料報告）
+        self.tw_postmarket_strict_today = _bool_env("TW_POSTMARKET_STRICT_TODAY", True)
+
+        # 拿不到當日資料時的重試次數與間隔（分鐘）
+        self.tw_postmarket_max_retries = int(os.getenv("TW_POSTMARKET_MAX_RETRIES", "3"))
+        if self.tw_postmarket_max_retries < 0:
+            self.tw_postmarket_max_retries = 0
+        if self.tw_postmarket_max_retries > 12:
+            self.tw_postmarket_max_retries = 12
+        self.tw_postmarket_retry_interval_min = int(
+            os.getenv("TW_POSTMARKET_RETRY_INTERVAL_MIN", "10")
+        )
+        if self.tw_postmarket_retry_interval_min < 1:
+            self.tw_postmarket_retry_interval_min = 1
+        if self.tw_postmarket_retry_interval_min > 60:
+            self.tw_postmarket_retry_interval_min = 60
+
         self._validate()
 
     def _validate(self) -> None:
