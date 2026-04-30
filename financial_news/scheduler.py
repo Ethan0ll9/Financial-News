@@ -165,7 +165,7 @@ class NewsScheduler:
         )
         logger.info(
             "排程已註冊：08:00 晨間 digest+盤前、20:00 digest、%02d:%02d 盤後（Asia/Taipei；"
-            "FinMind 官方 17:30 公布當日 K 線，實測 14:00 後通常可用，搭配重試機制）",
+            "FinMind 官方 17:30 公布當日 K 線，實測約 14:30 前後通常可用，搭配重試機制）",
             post_hour,
             post_minute,
         )

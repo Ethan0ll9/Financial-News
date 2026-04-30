@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument(
         "--postmarket-only",
         action="store_true",
-        help="單次僅執行台股盤後總結（與排程 13:45 相同；仍受 TW_BRIEFING_ENABLED 控制）",
+        help="單次僅執行台股盤後總結（邏輯與排程相同，時間依 TW_POSTMARKET_HOUR/MINUTE；仍受 TW_BRIEFING_ENABLED 控制）",
     )
     parser.add_argument(
         "--day-once",
