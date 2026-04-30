@@ -2,17 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import FrozenSet, List, Optional, Set
 
+from financial_news.tw_briefing.date_parsing import parse_iso_date as _parse_iso
 from financial_news.tw_briefing.finmind_client import FinMindClient
-
-
-def _parse_iso(d: str) -> Optional[date]:
-    try:
-        return datetime.strptime(d[:10], "%Y-%m-%d").date()
-    except ValueError:
-        return None
 
 
 @dataclass

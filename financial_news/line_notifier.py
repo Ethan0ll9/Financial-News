@@ -5,11 +5,11 @@ from typing import List, Optional
 
 import requests
 
-from financial_news.utils import setup_logger
+from financial_news.core.api_endpoints import LINE_PUSH_MESSAGE_URL as PUSH_MESSAGE_URL
+from financial_news.core.http import HttpClient
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
-
-PUSH_MESSAGE_URL = "https://api.line.me/v2/bot/message/push"
 
 MAX_TEXT_LEN = 4500
 _MAX_MESSAGES_PER_PUSH = 5
@@ -19,6 +19,8 @@ class LineNotifier:
     def __init__(self, channel_access_token: str, user_id: str) -> None:
         self._token = channel_access_token
         self._user_id = user_id
+        # 共享 Session：所有 push 重用 keep-alive 連線；timeout 沿用原本 30s
+        self._http = HttpClient(timeout=30.0, name="line")
 
     def _headers(self) -> dict:
         return {
@@ -75,11 +77,10 @@ class LineNotifier:
             logger.error("LINE 設定不完整，略過發送")
             return False
         try:
-            resp = requests.post(
+            resp = self._http.post_json(
                 PUSH_MESSAGE_URL,
-                headers=self._headers(),
                 json={"to": self._user_id, "messages": messages},
-                timeout=30,
+                headers=self._headers(),
             )
             if resp.status_code == 200:
                 logger.info("LINE push 成功（%d 則訊息區塊）", len(messages))

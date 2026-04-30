@@ -29,7 +29,7 @@ from matplotlib.gridspec import GridSpec  # noqa: E402
 from financial_news.tw_briefing.finmind_client import IndexBar
 from financial_news.tw_briefing.market_queries import ProxyStat
 from financial_news.tw_briefing.theme_detect import MarketDigest, ThemeSummary
-from financial_news.utils import setup_logger
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -47,28 +47,24 @@ _CJK_FONT_CANDIDATES = [
 
 _FONT_READY = False
 
-# 去除 U+1F300 ~ U+1FAFF、U+2600 ~ U+27BF 等 emoji 區段，避免 matplotlib 缺字警告
-import re as _re
-
-_EMOJI_RE = _re.compile(
-    "["
-    "\U0001F300-\U0001FAFF"
-    "\U00002600-\U000027BF"
-    "\U0001F000-\U0001F2FF"
-    "]",
-    flags=_re.UNICODE,
+from financial_news.tw_briefing.formatting import (
+    COLOR_DOWN as _COLOR_DOWN,
+    COLOR_FLAT as _COLOR_FLAT,
+    COLOR_UP as _COLOR_UP,
+    fmt_pct as _fmt_pct,
+    fmt_yi as _fmt_yi_base,
+    pct_color_hex as _color_by_pct,
+    strip_emoji as _strip_emoji,
 )
 
-
-def _strip_emoji(s: str) -> str:
-    return _EMOJI_RE.sub("", s).strip()
-
-_COLOR_UP = "#d9534f"   # 漲（紅）
-_COLOR_DOWN = "#2d8f5a"  # 跌（綠）
-_COLOR_FLAT = "#95a5a6"
 _COLOR_BG = "#ffffff"
 _COLOR_CARD = "#f6f8fb"
 _COLOR_TEXT = "#212529"
+
+
+def _fmt_yi(turnover: int) -> str:
+    """chart 使用 1 位小數（與舊版一致）。"""
+    return _fmt_yi_base(turnover, decimals=1)
 _COLOR_MUTED = "#6c757d"
 _COLOR_ACCENT = "#3559a5"
 
@@ -95,23 +91,6 @@ def _ensure_cjk_font() -> None:
             ", ".join(_CJK_FONT_CANDIDATES),
         )
     _FONT_READY = True
-
-
-def _fmt_pct(v: float) -> str:
-    sign = "+" if v >= 0 else ""
-    return f"{sign}{v:.2f}%"
-
-
-def _fmt_yi(turnover: int) -> str:
-    return f"{turnover / 1e8:,.1f} 億"
-
-
-def _color_by_pct(p: float) -> str:
-    if p > 0.05:
-        return _COLOR_UP
-    if p < -0.05:
-        return _COLOR_DOWN
-    return _COLOR_FLAT
 
 
 @dataclass

@@ -1,0 +1,155 @@
+"""共用 HTTP client：requests.Session + 預設 timeout / log / 可選重試。
+
+語意分層：
+    底層 ``HttpClient`` 只負責 transport（Session、timeout、headers、retry、log）。
+    它**不**主動 ``raise_for_status()`` 也**不**吞 exception；要不要把 4xx/5xx
+    視為錯誤、要不要降級回空清單，**全部由呼叫端自己決定**——這樣才能保留各
+    模組原有的錯誤策略（FinMind 拋錯、TWSE 回 []、LINE 看 status_code 200）。
+
+設計重點：
+    1. 內部維護 ``requests.Session()``，所有呼叫共用連線池
+    2. 預設 retry total=0（與現狀一致），預留欄位給未來擴充
+    3. log 統一加 ``name`` 便於追蹤（finmind / twse / line / imgbb / rss / cnyes）
+    4. 每個方法都接受 ``timeout=`` per-call override（因為 FinMind 用 90/120）
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+import requests
+from requests.adapters import HTTPAdapter
+
+try:
+    # urllib3 >= 1.26
+    from urllib3.util.retry import Retry
+except ImportError:  # pragma: no cover - fallback
+    Retry = None  # type: ignore[assignment]
+
+from financial_news.core.utils import setup_logger
+
+logger = setup_logger(__name__)
+
+
+@dataclass(frozen=True)
+class HttpRetryPolicy:
+    """連線層重試政策（透過 urllib3 Retry 掛在 Session adapter）。"""
+
+    total: int = 0  # 0 = 不重試（與現狀一致）
+    backoff_factor: float = 0.5
+    status_forcelist: tuple = (502, 503, 504)
+    allowed_methods: tuple = ("GET", "POST")
+
+
+@dataclass
+class HttpClient:
+    """薄包裝：Session + 預設參數 + log。
+
+    使用方式：
+        client = HttpClient(timeout=60, name="twse")
+        data = client.get_json(url)              # 失敗會拋 RequestException
+        resp = client.post_json(url, json=...)   # 回原始 Response，呼叫端自己看 status
+    """
+
+    timeout: float = 60.0
+    default_headers: Optional[dict] = None
+    retry: Optional[HttpRetryPolicy] = None
+    name: str = "http"
+    _session: requests.Session = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        sess = requests.Session()
+        if self.default_headers:
+            sess.headers.update(self.default_headers)
+        if self.retry and self.retry.total > 0 and Retry is not None:
+            r = Retry(
+                total=self.retry.total,
+                backoff_factor=self.retry.backoff_factor,
+                status_forcelist=list(self.retry.status_forcelist),
+                allowed_methods=list(self.retry.allowed_methods),
+            )
+            adapter = HTTPAdapter(max_retries=r)
+            sess.mount("http://", adapter)
+            sess.mount("https://", adapter)
+        self._session = sess
+
+    # ---- helpers ------------------------------------------------------------
+
+    def _to(self, override: Optional[float]) -> float:
+        return override if override is not None else self.timeout
+
+    # ---- public API ---------------------------------------------------------
+
+    def get_json(
+        self,
+        url: str,
+        *,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        timeout: Optional[float] = None,
+    ) -> Any:
+        """GET → ``raise_for_status`` → ``.json()``；失敗會把例外往外拋。"""
+        resp = self._session.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=self._to(timeout),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_bytes(
+        self,
+        url: str,
+        *,
+        headers: Optional[dict] = None,
+        timeout: Optional[float] = None,
+    ) -> bytes:
+        """GET → ``raise_for_status`` → ``.content``（給 RSS/feedparser 用）。"""
+        resp = self._session.get(
+            url,
+            headers=headers,
+            timeout=self._to(timeout),
+        )
+        resp.raise_for_status()
+        return resp.content
+
+    def post_json(
+        self,
+        url: str,
+        *,
+        json: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        timeout: Optional[float] = None,
+    ) -> requests.Response:
+        """POST JSON；**不**做 ``raise_for_status``，由呼叫端決定。"""
+        return self._session.post(
+            url,
+            json=json,
+            headers=headers,
+            timeout=self._to(timeout),
+        )
+
+    def post_multipart(
+        self,
+        url: str,
+        *,
+        files: Optional[dict] = None,
+        data: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        timeout: Optional[float] = None,
+    ) -> requests.Response:
+        """POST multipart（給 imgbb 上傳用）；**不**做 ``raise_for_status``。"""
+        return self._session.post(
+            url,
+            files=files,
+            data=data,
+            headers=headers,
+            timeout=self._to(timeout),
+        )
+
+    def close(self) -> None:
+        try:
+            self._session.close()
+        except Exception:
+            pass

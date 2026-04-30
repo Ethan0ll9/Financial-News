@@ -5,13 +5,10 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, List, Optional
 
-import requests
-
-from financial_news.utils import setup_logger
+from financial_news.core.api_endpoints import TWSE_TWT48U_URL as TWT48U_URL
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
-
-TWT48U_URL = "https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL"
 
 
 @dataclass(frozen=True)
@@ -39,16 +36,10 @@ def roc_minguo_date_to_gregorian(s: str) -> Optional[date]:
 
 
 def fetch_twt48u_all() -> List[dict[str, Any]]:
-    try:
-        resp = requests.get(TWT48U_URL, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, list):
-            return data
-        return []
-    except (requests.RequestException, ValueError) as e:
-        logger.warning("TWT48U_ALL 擷取失敗: %s", e)
-        return []
+    # 延遲 import 以避免 twse_openapi → twse_market → exdividend 的循環風險
+    from financial_news.tw_briefing.twse_openapi import fetch_twse_list
+
+    return fetch_twse_list(TWT48U_URL)
 
 
 def _row_to_event(row: dict[str, Any]) -> Optional[ExDividendEvent]:

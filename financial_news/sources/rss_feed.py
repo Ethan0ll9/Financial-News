@@ -7,10 +7,11 @@ from urllib.parse import urlparse
 import feedparser
 import requests
 
+from financial_news.core.http import HttpClient
 from financial_news.models import NewsItem
 from financial_news.sources.base import NewsSource
 from financial_news.sources.rss_catalog import rss_feed_meta
-from financial_news.utils import setup_logger, strip_html
+from financial_news.core.utils import setup_logger, strip_html
 
 logger = setup_logger(__name__)
 
@@ -50,6 +51,12 @@ class RssFeedSource(NewsSource):
         self._items_per_feed = max(1, items_per_feed)
         self._max_total_items = max_total_items
         self._timeout = timeout_sec
+        # 共享 Session：單次 digest 會抓 ~30 個 feed，keep-alive 對效能有幫助
+        self._http = HttpClient(
+            timeout=timeout_sec,
+            default_headers=HEADERS,
+            name="rss",
+        )
 
     @property
     def name(self) -> str:
@@ -62,9 +69,8 @@ class RssFeedSource(NewsSource):
 
     def _fetch_one_feed(self, url: str, max_entries: int) -> List[NewsItem]:
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=self._timeout)
-            resp.raise_for_status()
-            parsed = feedparser.parse(resp.content)
+            content = self._http.get_bytes(url)
+            parsed = feedparser.parse(content)
         except requests.RequestException as e:
             logger.error("RSS 請求失敗 %s: %s", url, e)
             return []

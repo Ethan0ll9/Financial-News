@@ -24,7 +24,11 @@ from financial_news.tw_briefing.event_window import (
 from financial_news.tw_briefing.exdividend import fetch_twt48u_all
 from financial_news.tw_briefing.finmind_client import FinMindClient, IndexBar
 from financial_news.tw_briefing.flex_builder import build_briefing_bubble
-from financial_news.tw_briefing.html_report import HtmlReportData, write_html_report
+from financial_news.tw_briefing.html_report import (
+    HtmlReportData,
+    text_block_to_html as _text_block_to_html,
+    write_html_report,
+)
 from financial_news.tw_briefing.official_events import parse_suspended_row
 from financial_news.tw_briefing.twse_announcements import fetch_shareholder_meetings
 from financial_news.tw_briefing.market_queries import (
@@ -40,7 +44,7 @@ from financial_news.tw_briefing.market_text import describe_index_session, pct_c
 from financial_news.tw_briefing.theme_detect import build_market_digest
 from financial_news.tw_briefing.tw_calendar import TwCalendar
 from financial_news.tw_briefing.twse_market import market_totals_on
-from financial_news.utils import setup_logger
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
 _TZ_TW = ZoneInfo("Asia/Taipei")
@@ -128,9 +132,6 @@ def _event_verify_text(
     return "\n".join(lines).rstrip()
 
 
-def _text_block_to_html(text: str) -> str:
-    import html as _html
-    return f'<pre style="font-family:inherit;font-size:12px;color:#374151;white-space:pre-wrap;margin:0">{_html.escape(text)}</pre>'
 
 
 def run_postmarket(settings: Settings, *, force: bool = False) -> None:

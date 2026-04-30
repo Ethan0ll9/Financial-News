@@ -15,14 +15,12 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-import requests
-
+from financial_news.core.api_endpoints import TWSE_FMTQIK_URL as FMTQIK_URL
 from financial_news.tw_briefing.exdividend import roc_minguo_date_to_gregorian
-from financial_news.utils import setup_logger
+from financial_news.tw_briefing.twse_openapi import fetch_twse_list
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
-
-FMTQIK_URL = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"
 
 
 @dataclass(frozen=True)
@@ -37,18 +35,10 @@ class MarketTotals:
     transaction_count: int       # 成交筆數
 
 
-def _to_float(s: Any) -> float:
-    try:
-        return float(str(s).replace(",", "").strip() or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _to_int(s: Any) -> int:
-    try:
-        return int(float(str(s).replace(",", "").strip() or 0))
-    except (TypeError, ValueError):
-        return 0
+from financial_news.tw_briefing.twse_parse import (
+    parse_twse_float as _to_float,
+    parse_twse_int as _to_int,
+)
 
 
 def _row_to_totals(row: Dict[str, Any]) -> Optional[MarketTotals]:
@@ -67,16 +57,7 @@ def _row_to_totals(row: Dict[str, Any]) -> Optional[MarketTotals]:
 
 def fetch_fmtqik_all() -> List[Dict[str, Any]]:
     """抓取 TWSE FMTQIK 原始回傳（list[dict]）。失敗回 []。"""
-    try:
-        resp = requests.get(FMTQIK_URL, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, list):
-            return data
-        return []
-    except (requests.RequestException, ValueError) as e:
-        logger.warning("FMTQIK 擷取失敗: %s", e)
-        return []
+    return fetch_twse_list(FMTQIK_URL)
 
 
 def parse_fmtqik(rows: List[Dict[str, Any]]) -> List[MarketTotals]:

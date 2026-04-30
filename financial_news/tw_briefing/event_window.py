@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from financial_news.tw_briefing.date_parsing import parse_iso_date
 from financial_news.tw_briefing.exdividend import (
     ExDividendEvent,
     events_in_date_range,
@@ -75,19 +76,11 @@ def _emoji(kind: str) -> str:
 
 
 def _resumption_date_of(s: SuspendedEvent) -> Optional[date]:
-    raw = (s.resumption_date or "")[:10]
-    try:
-        return datetime.strptime(raw, "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    return parse_iso_date(s.resumption_date)
 
 
 def _suspended_start_of(s: SuspendedEvent) -> Optional[date]:
-    raw = (s.announce_date or "")[:10]
-    try:
-        return datetime.strptime(raw, "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    return parse_iso_date(s.announce_date)
 
 
 def collect_lookahead(

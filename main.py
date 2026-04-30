@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 
 from financial_news.scheduler import NewsScheduler, run_digest, run_morning_sequence, run_postmarket_briefing
-from financial_news.utils import setup_logger
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
 

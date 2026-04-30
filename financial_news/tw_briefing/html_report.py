@@ -9,7 +9,7 @@ from typing import List, Optional
 from financial_news.tw_briefing.finmind_client import IndexBar
 from financial_news.tw_briefing.market_queries import ProxyStat
 from financial_news.tw_briefing.theme_detect import MarketDigest, ThemeSummary
-from financial_news.utils import setup_logger
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -22,21 +22,27 @@ def _esc(s: str) -> str:
     return html.escape(s or "", quote=True)
 
 
-def _fmt_pct(v: float) -> str:
-    sign = "+" if v >= 0 else ""
-    return f"{sign}{v:.2f}%"
+def text_block_to_html(text: str) -> str:
+    """把純文字段落轉成 HTML 可顯示的預格式化區塊（保留換行與全形空白）。
+
+    供 premarket_report / postmarket_report 共用，避免兩處重複定義。
+    """
+    return (
+        '<pre style="font-family:inherit;font-size:12px;color:#374151;'
+        f'white-space:pre-wrap;margin:0">{html.escape(text)}</pre>'
+    )
+
+
+from financial_news.tw_briefing.formatting import (
+    fmt_pct as _fmt_pct,
+    fmt_yi as _fmt_yi_base,
+    pct_class_name as _pct_class,
+)
 
 
 def _fmt_yi(money: int) -> str:
-    return f"{money / 1e8:,.2f} 億"
-
-
-def _pct_class(v: float) -> str:
-    if v > 0.05:
-        return "up"
-    if v < -0.05:
-        return "down"
-    return "flat"
+    """html 使用 2 位小數（與舊版一致）。"""
+    return _fmt_yi_base(money, decimals=2)
 
 
 def _bar_svg(values: List[float], max_abs: float, *, width: int = 220, height: int = 14) -> str:

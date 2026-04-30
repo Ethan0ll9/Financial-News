@@ -8,10 +8,13 @@ from __future__ import annotations
 from typing import List, Optional
 
 from financial_news.tw_briefing.finmind_client import IndexBar
+from financial_news.tw_briefing.formatting import fmt_pct as _fmt_pct
+from financial_news.tw_briefing.formatting import fmt_yi as _fmt_yi_base
 from financial_news.tw_briefing.market_queries import ProxyStat
 from financial_news.tw_briefing.theme_detect import MarketDigest, ThemeSummary
 
 
+# flex 使用大寫 hex 與較深的 flat 灰，與 chart_builder 不同；保留為專屬常數
 _COLOR_UP = "#D9534F"
 _COLOR_DOWN = "#2D8F5A"
 _COLOR_FLAT = "#868E96"
@@ -28,13 +31,9 @@ def _pct_color(p: float) -> str:
     return _COLOR_FLAT
 
 
-def _fmt_pct(p: float) -> str:
-    sign = "+" if p >= 0 else ""
-    return f"{sign}{p:.2f}%"
-
-
 def _fmt_yi(money: int) -> str:
-    return f"{money / 1e8:,.1f} 億"
+    """flex 使用 1 位小數（與舊版一致）。"""
+    return _fmt_yi_base(money, decimals=1)
 
 
 def _kv(label: str, value: str, value_color: Optional[str] = None) -> dict:

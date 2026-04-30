@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import List, Optional
 
+from financial_news.tw_briefing.date_parsing import parse_iso_date
 from financial_news.tw_briefing.finmind_client import FinMindClient
-from financial_news.utils import setup_logger
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -47,9 +48,8 @@ def fetch_suspended_between(
     for row in rows:
         ev = parse_suspended_row(row)
         if ev:
-            try:
-                d = datetime.strptime(ev.announce_date[:10], "%Y-%m-%d").date()
-            except ValueError:
+            d = parse_iso_date(ev.announce_date)
+            if d is None:
                 continue
             if start <= d <= end:
                 out.append(ev)

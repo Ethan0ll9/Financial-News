@@ -8,13 +8,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, List, Optional
 
-import requests
-
-from financial_news.utils import setup_logger
+from financial_news.core.api_endpoints import FINMIND_DATA_URL
+from financial_news.core.http import HttpClient
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
-
-FINMIND_DATA_URL = "https://api.finmindtrade.com/api/v4/data"
 
 
 @dataclass(frozen=True)
@@ -35,18 +33,19 @@ class FinMindClient:
         self._token = token.strip()
         self._cache_dir = cache_dir
         self._headers = {"Authorization": f"Bearer {self._token}"}
+        # 共享 Session：同次盤前/盤後可能呼叫 6~10 次 FinMind，keep-alive 對效能有幫助
+        # 預設 timeout=90，部分大 dataset（如 TradingDate）以 per-call 覆寫為 120
+        self._http = HttpClient(timeout=90.0, name="finmind")
 
     def _get(self, params: dict[str, Any], *, timeout: float = 90.0) -> List[dict[str, Any]]:
         if not self._token:
             raise ValueError("FINMIND_TOKEN 未設定")
-        resp = requests.get(
+        payload = self._http.get_json(
             FINMIND_DATA_URL,
-            headers=self._headers,
             params=params,
+            headers=self._headers,
             timeout=timeout,
         )
-        resp.raise_for_status()
-        payload = resp.json()
         status = payload.get("status")
         if status != 200:
             raise RuntimeError(payload.get("msg") or str(payload))

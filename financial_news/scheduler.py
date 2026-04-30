@@ -16,7 +16,7 @@ from financial_news.sources.rss_feed import RssFeedSource
 from financial_news.tw_briefing.digest_context import reset_digest_rss_items, set_digest_rss_items
 from financial_news.tw_briefing.premarket_report import run_premarket
 from financial_news.tw_briefing.postmarket_report import run_postmarket
-from financial_news.utils import setup_logger, strip_html
+from financial_news.core.utils import setup_logger, strip_html
 
 logger = setup_logger(__name__)
 

@@ -19,7 +19,11 @@ from financial_news.tw_briefing.digest_context import get_digest_rss_items
 from financial_news.tw_briefing.exdividend import events_on_date, fetch_twt48u_all
 from financial_news.tw_briefing.finmind_client import FinMindClient
 from financial_news.tw_briefing.flex_builder import build_briefing_bubble
-from financial_news.tw_briefing.html_report import HtmlReportData, write_html_report
+from financial_news.tw_briefing.html_report import (
+    HtmlReportData,
+    text_block_to_html as _text_block_to_html,
+    write_html_report,
+)
 from financial_news.tw_briefing.event_window import (
     collect_in_progress,
     collect_lookahead,
@@ -53,7 +57,7 @@ from financial_news.tw_briefing.twse_announcements import (
     short_cover_on,
 )
 from financial_news.tw_briefing.twse_market import market_totals_on
-from financial_news.utils import setup_logger
+from financial_news.core.utils import setup_logger
 
 from dataclasses import replace
 
@@ -108,10 +112,6 @@ def _format_today_events(
     return "\n".join(lines)
 
 
-def _text_block_to_html(text: str) -> str:
-    """把既有的純文字段落轉成可在 HTML 顯示的預格式化區塊。"""
-    import html as _html
-    return f'<pre style="font-family:inherit;font-size:12px;color:#374151;white-space:pre-wrap;margin:0">{_html.escape(text)}</pre>'
 
 
 def run_premarket(settings: Settings, *, force: bool = False) -> None:

@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 from financial_news.tw_briefing.finmind_client import FinMindClient, IndexBar
 from financial_news.tw_briefing.market_text import pct_change
-from financial_news.utils import setup_logger
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -178,14 +178,15 @@ def gather_proxy_stats(
     return [r for r in results if r is not None]
 
 
-def _fmt_pct(p: float) -> str:
-    sign = "+" if p >= 0 else ""
-    return f"{sign}{p:.2f}%"
+from financial_news.tw_briefing.formatting import (
+    fmt_pct as _fmt_pct,
+    fmt_yi as _fmt_yi_base,
+)
 
 
 def _fmt_turnover_yi(money: int) -> str:
-    """成交金額轉「X 億」字串。"""
-    return f"{money / 1e8:,.2f} 億"
+    """成交金額轉「X.XX 億」字串（market_queries 使用 2 位小數）。"""
+    return _fmt_yi_base(money, decimals=2)
 
 
 def format_sector_strength(

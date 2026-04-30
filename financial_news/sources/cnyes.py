@@ -5,14 +5,16 @@ from typing import Any, List
 
 import requests
 
+from financial_news.core.api_endpoints import (
+    CNYES_ARTICLE_URL_TEMPLATE as DEFAULT_ARTICLE_URL_TEMPLATE,
+    CNYES_POPULAR_URL,
+)
+from financial_news.core.http import HttpClient
 from financial_news.models import NewsItem
 from financial_news.sources.base import NewsSource
-from financial_news.utils import setup_logger
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
-
-CNYES_POPULAR_URL = "https://api.cnyes.com/media/api/v1/newslist/popular"
-DEFAULT_ARTICLE_URL_TEMPLATE = "https://news.cnyes.com/news/id/{news_id}"
 
 HEADERS = {
     "User-Agent": "Financial-NewsDigest/1.0 (+https://github.com/)",
@@ -26,6 +28,12 @@ class CnyesPopularSource(NewsSource):
     def __init__(self, category: str = "all", timeout_sec: float = 30.0) -> None:
         self._category = category
         self._timeout = timeout_sec
+        # 共享 Session：每天 2 次 digest 都會抓；UA/Accept 設為 default headers
+        self._http = HttpClient(
+            timeout=timeout_sec,
+            default_headers=HEADERS,
+            name="cnyes",
+        )
 
     @property
     def name(self) -> str:
@@ -35,13 +43,7 @@ class CnyesPopularSource(NewsSource):
         if n <= 0:
             return []
         try:
-            resp = requests.get(
-                CNYES_POPULAR_URL,
-                headers=HEADERS,
-                timeout=self._timeout,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            data = self._http.get_json(CNYES_POPULAR_URL)
         except requests.RequestException as e:
             logger.error("鉅亨 API 請求失敗: %s", e)
             return []

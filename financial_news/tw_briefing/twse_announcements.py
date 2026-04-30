@@ -16,18 +16,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
-import requests
-
+from financial_news.core.api_endpoints import (
+    TWSE_NOTICE_URL as NOTICE_URL,
+    TWSE_PUNISH_URL as PUNISH_URL,
+    TWSE_SHAREHOLDER_MEETING_URL as SHAREHOLDER_MEETING_URL,
+)
 from financial_news.tw_briefing.exdividend import roc_minguo_date_to_gregorian
-from financial_news.utils import setup_logger
+from financial_news.core.utils import setup_logger
 
 logger = setup_logger(__name__)
-
-NOTICE_URL = "https://openapi.twse.com.tw/v1/announcement/notice"
-PUNISH_URL = "https://openapi.twse.com.tw/v1/announcement/punish"
-SHAREHOLDER_MEETING_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap38_L"
 
 
 # ---- dataclasses --------------------------------------------------------------
@@ -75,22 +74,8 @@ class ShareholderMeeting:
 # ---- helpers -----------------------------------------------------------------
 
 
-def _safe_float(s: Any) -> float:
-    try:
-        return float(str(s).replace(",", "").strip() or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _http_get_json(url: str) -> List[Dict[str, Any]]:
-    try:
-        resp = requests.get(url, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        return data if isinstance(data, list) else []
-    except (requests.RequestException, ValueError) as e:
-        logger.warning("TWSE OpenAPI 擷取失敗 %s: %s", url, e)
-        return []
+from financial_news.tw_briefing.twse_openapi import fetch_twse_list as _http_get_json
+from financial_news.tw_briefing.twse_parse import parse_twse_float as _safe_float
 
 
 def _row_is_blank(row: Dict[str, Any]) -> bool:
