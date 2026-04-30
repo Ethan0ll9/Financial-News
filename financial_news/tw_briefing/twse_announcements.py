@@ -199,8 +199,36 @@ def fetch_shareholder_meetings() -> List[ShareholderMeeting]:
 # ---- 篩選工具 ----------------------------------------------------------------
 
 
+def is_warrant(stock_id: str, stock_name: str = "") -> bool:
+    """判斷是否為認購／認售權證（或牛熊證等衍生性商品）。
+
+    判別規則（保守組合）：
+    1. 名稱含「購」「售」「牛」「熊」其中任一個關鍵字 → 視為權證類；或
+    2. ``stock_id`` 不是 4 碼純數字（例如 6 碼數字、含字母如 ``05722U``）。
+
+    一般股票（4 碼）與大多數 ETF（``00xxx``）都不會被誤判：4 碼純數字命中
+    例外、ETF 名稱也不含「購／售／牛／熊」。
+    """
+    name = stock_name or ""
+    for kw in ("購", "售", "牛", "熊"):
+        if kw in name:
+            return True
+    sid = (stock_id or "").strip()
+    if not sid.isdigit() or len(sid) != 4:
+        return True
+    return False
+
+
 def attentions_on(items: List[AttentionStock], target: date) -> List[AttentionStock]:
     return [x for x in items if x.announce_date == target]
+
+
+def exclude_warrants_attention(items: List[AttentionStock]) -> List[AttentionStock]:
+    return [x for x in items if not is_warrant(x.stock_id, x.stock_name)]
+
+
+def exclude_warrants_disposal(items: List[DisposalStock]) -> List[DisposalStock]:
+    return [x for x in items if not is_warrant(x.stock_id, x.stock_name)]
 
 
 def disposals_on(items: List[DisposalStock], target: date) -> List[DisposalStock]:

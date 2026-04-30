@@ -99,6 +99,7 @@ def collect_lookahead(
     tw48_rows: Optional[List[dict]] = None,
     sh_meetings: Optional[List[ShareholderMeeting]] = None,
     suspended: Optional[List[SuspendedEvent]] = None,
+    watch_tickers: Optional[Iterable[str]] = None,
 ) -> List[LookaheadItem]:
     """彙整 base_date 之後的 n 個交易日內的事件。
 
@@ -106,12 +107,16 @@ def collect_lookahead(
     / ``suspended_resume``。今日（D-Day=0）通常已有獨立區塊，此函式預設「不含
     今日」，僅列 D-1 ~ D-N（如需含今日，呼叫端自行加入；今日資料已由
     ``_format_today_events`` 顯示）。
+
+    ``watch_tickers``：若提供，``shareholder_meeting`` / ``short_cover`` 只會保留
+    該 set 內的個股（避免上千家公司全部塞進預告）。除權息與停復牌不受影響。
     """
     target_days = cal.next_n_trading_days(base_date, n_trading_days)
     if not target_days:
         return []
     target_set = set(target_days)
     kinds = set(include_kinds)
+    watch_set: Optional[set] = set(watch_tickers) if watch_tickers is not None else None
     out: List[LookaheadItem] = []
 
     if "exdiv" in kinds and tw48_rows is not None:
@@ -124,10 +129,14 @@ def collect_lookahead(
         if "shareholder_meeting" in kinds:
             for m in sh_meetings:
                 if m.meeting_date and m.meeting_date in target_set:
+                    if watch_set is not None and m.stock_id not in watch_set:
+                        continue
                     out.append(_from_meeting(m, base_date))
         if "short_cover" in kinds:
             for m in sh_meetings:
                 if m.short_cover_due and m.short_cover_due in target_set:
+                    if watch_set is not None and m.stock_id not in watch_set:
+                        continue
                     out.append(_from_short_cover(m, base_date))
 
     if "suspended_resume" in kinds and suspended:
@@ -193,8 +202,17 @@ def _countdown_label(cd: int) -> str:
     return f"D-{cd}"
 
 
-def format_lookahead_block(items: List[LookaheadItem], *, base_date: date) -> str:
-    """以「日期分組」格式化未來預告區塊。"""
+def format_lookahead_block(
+    items: List[LookaheadItem],
+    *,
+    base_date: date,
+    max_per_kind_per_day: int = 5,
+) -> str:
+    """以「日期分組」格式化未來預告區塊。
+
+    ``max_per_kind_per_day``：同一天同一種事件（如股東會）最多顯示幾筆，
+    超過以「及其他 N 家」摘要替代，避免大量股東會撐爆訊息長度。
+    """
     lines: List[str] = ["【近 5 日事件預告】", ""]
     if not items:
         lines.append("（未來 5 個交易日內無已知重點事件）")
@@ -207,12 +225,24 @@ def format_lookahead_block(items: List[LookaheadItem], *, base_date: date) -> st
         first = by_day[d][0]
         cd = _countdown_label(first.countdown)
         lines.append(f"— {d.isoformat()}（{cd}）")
+        # 按 kind 分組，各 kind 分別限制顯示筆數
+        by_kind: Dict[str, List[LookaheadItem]] = defaultdict(list)
         for it in by_day[d]:
-            label = _KIND_LABEL.get(it.kind, it.kind)
-            emoji = _emoji(it.kind)
-            name = f" {it.stock_name}" if it.stock_name else ""
-            note = f"｜{it.note}" if it.note else ""
-            lines.append(f"・{emoji} {label}｜{it.stock_id}{name}{note}")
+            by_kind[it.kind].append(it)
+        for kind in sorted(by_kind.keys()):
+            kind_items = by_kind[kind]
+            shown = kind_items[:max_per_kind_per_day]
+            overflow = len(kind_items) - len(shown)
+            for it in shown:
+                label = _KIND_LABEL.get(it.kind, it.kind)
+                emoji = _emoji(it.kind)
+                name = f" {it.stock_name}" if it.stock_name else ""
+                note = f"｜{it.note}" if it.note else ""
+                lines.append(f"・{emoji} {label}｜{it.stock_id}{name}{note}")
+            if overflow > 0:
+                label = _KIND_LABEL.get(kind, kind)
+                emoji = _emoji(kind)
+                lines.append(f"・{emoji} {label}｜及其他 {overflow} 家")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -234,7 +264,14 @@ def collect_in_progress(
     sh_meetings: Optional[List[ShareholderMeeting]] = None,
     include_disposal: bool = True,
     include_book_close: bool = True,
+    watch_tickers: Optional[Iterable[str]] = None,
 ) -> List[InProgressItem]:
+    """彙整今日仍在「進行期間」內的事件。
+
+    ``watch_tickers``：若提供，``book_close``（停止過戶期間）只會保留該 set 內的
+    個股；``disposal`` 不受影響（家數本來就少，全列即可）。
+    """
+    watch_set: Optional[set] = set(watch_tickers) if watch_tickers is not None else None
     out: List[InProgressItem] = []
     if include_disposal and disposals:
         for d in disposals:
@@ -252,6 +289,8 @@ def collect_in_progress(
                 )
     if include_book_close and sh_meetings:
         for m in sh_meetings:
+            if watch_set is not None and m.stock_id not in watch_set:
+                continue
             if m.book_close_start and m.book_close_end and (
                 m.book_close_start <= today <= m.book_close_end
             ):
@@ -272,7 +311,17 @@ def collect_in_progress(
     return out
 
 
-def format_in_progress_block(items: List[InProgressItem], *, today: date) -> str:
+def format_in_progress_block(
+    items: List[InProgressItem],
+    *,
+    today: date,
+    max_per_kind: int = 10,
+) -> str:
+    """格式化進行中事件。
+
+    ``max_per_kind``：每種事件最多明細幾筆（預設 10），超過以「及其他 N 家」代替。
+    stock_close 通常達數百筆，預設值可有效壓縮訊息長度。
+    """
     lines: List[str] = ["【進行中事件（期間覆蓋今日）】", ""]
     if not items:
         lines.append("（今日無進行中之處置／停止過戶期間）")
@@ -289,8 +338,11 @@ def format_in_progress_block(items: List[InProgressItem], *, today: date) -> str
     for k in ("disposal", "book_close"):
         if k not in grouped:
             continue
-        lines.append(f"— {section_titles[k]}（{len(grouped[k])} 檔）")
-        for it in grouped[k]:
+        all_items = grouped[k]
+        shown = all_items[:max_per_kind]
+        overflow = len(all_items) - len(shown)
+        lines.append(f"— {section_titles[k]}（{len(all_items)} 檔）")
+        for it in shown:
             remaining = ""
             if it.period_end:
                 days = (it.period_end - today).days
@@ -301,6 +353,8 @@ def format_in_progress_block(items: List[InProgressItem], *, today: date) -> str
             lines.append(
                 f"・{it.stock_id} {it.stock_name}｜{it.detail}｜{period}{remaining}"
             )
+        if overflow > 0:
+            lines.append(f"・（及其他 {overflow} 家，完整清單見 HTML 報告）")
         lines.append("")
     return "\n".join(lines).rstrip()
 

@@ -45,6 +45,7 @@ from financial_news.tw_briefing.twse_announcements import (
     ShareholderMeeting,
     attentions_on,
     disposals_on,
+    exclude_warrants_disposal,
     fetch_attention_stocks,
     fetch_disposal_stocks,
     fetch_shareholder_meetings,
@@ -70,6 +71,7 @@ def _format_today_events(
     sh_meetings: Optional[List[ShareholderMeeting]] = None,
     short_cover: Optional[List[ShareholderMeeting]] = None,
 ) -> str:
+    """格式化今日重點。``sh_meetings`` / ``short_cover`` 應為已用 watch list 過濾後的清單。"""
     lines = ["【今日重點（除權息／停復牌／注意處置／股東會／融券回補）】", ""]
     initial_len = len(lines)
 
@@ -84,7 +86,6 @@ def _format_today_events(
             lines.append(
                 f"・停復牌｜{ev.stock_id} 公告 {ev.announce_date}，復牌 {ev.resumption_date or '—'}"
             )
-
     for a in (attention or []):
         lines.append(f"・注意股｜{a.stock_id} {a.stock_name}｜{a.note or '異常波動'}")
     for d in (disposal or []):
@@ -160,12 +161,29 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
         sus_raw = []
 
     attention_all = fetch_attention_stocks()
-    disposal_all = fetch_disposal_stocks()
+    # 處置股先剔除權證／牛熊證等衍生性商品（名稱含「購／售／牛／熊」或非 4 碼數字）
+    disposal_all = exclude_warrants_disposal(fetch_disposal_stocks())
     meetings_all = fetch_shareholder_meetings()
     today_attention = attentions_on(attention_all, today)
     today_disposal = disposals_on(disposal_all, today)
-    today_meetings = shareholder_meetings_on(meetings_all, today)
-    today_short_cover = short_cover_on(meetings_all, today)
+
+    # 觀察清單（事件過濾基準）：proxy 個股 + 今日 TWSE 列管
+    # 用於排除「我不關心的個股的股東會／融券回補／book_close」
+    watch_set: set = set(settings.tw_market_proxy_stocks)
+    for _e in events_on_date(tw48_rows, today):
+        watch_set.add(_e.stock_id)
+    for _a in today_attention:
+        watch_set.add(_a.stock_id)
+    for _d in today_disposal:
+        watch_set.add(_d.stock_id)
+
+    # 股東會／融券回補：以 watch_set 過濾，僅保留觀察清單個股
+    today_meetings = [
+        m for m in shareholder_meetings_on(meetings_all, today) if m.stock_id in watch_set
+    ]
+    today_short_cover = [
+        s for s in short_cover_on(meetings_all, today) if s.stock_id in watch_set
+    ]
 
     rss_items = get_digest_rss_items()
     macro_txt = format_macro_from_rss(rss_items)
@@ -262,7 +280,7 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
         sh_meetings=today_meetings,
         short_cover=today_short_cover,
     )
-    # 滾動視窗：未來 N 個交易日的預告（取代舊「週一才有的本週列表」）
+    # 滾動視窗：未來 N 個交易日的預告（股東會/融券回補以 watch_set 過濾）
     lookahead_items = collect_lookahead(
         base_date=today,
         cal=cal,
@@ -271,8 +289,13 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
         tw48_rows=tw48_rows,
         sh_meetings=meetings_all,
         suspended=sus_parsed,
+        watch_tickers=watch_set,
     )
-    lookahead_txt = format_lookahead_block(lookahead_items, base_date=today)
+    lookahead_txt = format_lookahead_block(
+        lookahead_items,
+        base_date=today,
+        max_per_kind_per_day=settings.tw_weekly_events_max_per_day,
+    )
 
     in_progress_items = collect_in_progress(
         today=today,
@@ -280,8 +303,13 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
         sh_meetings=meetings_all,
         include_disposal=("disposal" in settings.tw_events_inprogress_kinds),
         include_book_close=("book_close" in settings.tw_events_inprogress_kinds),
+        watch_tickers=watch_set,
     )
-    in_progress_txt = format_in_progress_block(in_progress_items, today=today)
+    in_progress_txt = format_in_progress_block(
+        in_progress_items,
+        today=today,
+        max_per_kind=settings.tw_weekly_events_max_per_day,
+    )
 
     extra_sections = [
         {"title": "今日重點（除權息／停復牌／注意處置／股東會／融券回補）", "body_html": _text_block_to_html(today_events_txt)},
@@ -420,7 +448,7 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
             )
         )
 
-    # 股東會 + 融券強制回補：常成為事件交易的觀察點
+    # 股東會 + 融券強制回補（已用 watch_set 過濾，僅保留觀察清單個股）
     for m in today_meetings:
         watch.append(m.stock_id)
         meet = m.meeting_date.isoformat() if m.meeting_date else ""
@@ -502,6 +530,10 @@ def _push_visual(
             }
         )
 
+    # 先送 flex + image
+    ok = notifier.push_messages(messages)
+
+    # tail 文字（事件、預告、進行中、海外摘要）以 push_text_chunks 分批送，避免截斷
     tail_lines: List[str] = []
     if force_banner:
         tail_lines.append("【測試】本日非 FinMind 交易日；大盤／族群以上一交易日收盤為準。")
@@ -514,9 +546,10 @@ def _push_visual(
     tail_lines.append(f"📎 本機儀表板：{html_path}")
     tail_text = "\n\n".join([t for t in tail_lines if t])
     if tail_text:
-        messages.append({"type": "text", "text": tail_text[:4500]})
+        if not notifier.push_text_chunks(tail_text):
+            ok = False
 
-    return notifier.push_messages(messages)
+    return ok
 
 
 def _build_text_fallback(

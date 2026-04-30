@@ -173,6 +173,8 @@ class Settings:
 
         # 預告涵蓋哪些事件 kind（逗號分隔）；預設核心三項
         # 可選：exdiv,shareholder_meeting,short_cover,suspended_resume
+        # 註：shareholder_meeting / short_cover / book_close 會以 watch_tickers 過濾，
+        # 僅保留觀察清單內個股（proxy + 今日除權息／注意／處置）
         _kinds = os.getenv(
             "TW_EVENTS_LOOKAHEAD_KINDS",
             "exdiv,shareholder_meeting,short_cover",
@@ -182,7 +184,7 @@ class Settings:
         ]
 
         # 進行中區塊涵蓋哪些 kind（逗號分隔）
-        # 可選：disposal,book_close
+        # 可選：disposal,book_close（book_close 同樣會以 watch_tickers 過濾）
         _ip = os.getenv("TW_EVENTS_INPROGRESS_KINDS", "disposal,book_close")
         self.tw_events_inprogress_kinds = [
             k.strip() for k in _ip.split(",") if k.strip()

@@ -258,8 +258,13 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
         next_td = cal.next_trading_day(today)
         try:
             tw48_rows = fetch_twt48u_all()
-            sus_rows = client.fetch_suspended(today.isoformat(), today.isoformat())
-            sus_parsed = [x for x in (parse_suspended_row(r) for r in sus_rows) if x]
+            # TaiwanStockSuspended 需要付費方案；失敗則略過停復牌部分，不影響其餘預告
+            try:
+                sus_rows = client.fetch_suspended(today.isoformat(), next_td.isoformat())
+                sus_parsed = [x for x in (parse_suspended_row(r) for r in sus_rows) if x]
+            except Exception as _sus_err:
+                logger.debug("TaiwanStockSuspended 無法取得（可能需付費方案），跳過：%s", _sus_err)
+                sus_parsed = []
             sh_meetings = fetch_shareholder_meetings()
             la_items = collect_lookahead(
                 base_date=today,
@@ -410,6 +415,10 @@ def _push_visual(
             }
         )
 
+    # 先送 flex + image
+    ok = notifier.push_messages(messages)
+
+    # tail 文字以 push_text_chunks 分批送，避免截斷
     tail_lines: List[str] = []
     if force_banner:
         tail_lines.append("【測試】本日非交易日；若無當日 K 線為正常。")
@@ -419,9 +428,10 @@ def _push_visual(
     tail_lines.append(f"📎 本機儀表板：{html_path}")
     tail_text = "\n\n".join([t for t in tail_lines if t])
     if tail_text:
-        messages.append({"type": "text", "text": tail_text[:4500]})
+        if not notifier.push_text_chunks(tail_text):
+            ok = False
 
-    return notifier.push_messages(messages)
+    return ok
 
 
 def _fetch_index_with_retry(
