@@ -97,7 +97,8 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 780px) { .row { grid-template-columns: 1fr; } }
 .up { color: var(--up); } .down { color: var(--down); } .flat { color: var(--flat); }
-.big-pct { font-size: 40px; font-weight: 700; }
+.big-pct { font-size: 40px; font-weight: 700; line-height: 1.1; }
+.big-pts { font-size: 18px; font-weight: 600; margin-top: 2px; }
 .stat-line { font-size: 13px; color: var(--muted); margin-top: 4px; }
 .ohlc { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 10px; }
 .ohlc > div { background: #f8f9fc; padding: 10px 12px; border-radius: 10px; }
@@ -129,11 +130,18 @@ def _render_header(data: HtmlReportData) -> str:
     bar = data.index_bar
     prev = data.index_prev_close
     pct_html = ""
+    pts_html = ""
     if bar and prev and prev > 0:
         p = (bar.close - prev) / prev * 100.0
-        pct_html = f'<div class="big-pct {_pct_class(p)}">{_fmt_pct(p)}</div>'
+        diff = bar.close - prev
+        cls = _pct_class(p)
+        pct_html = f'<div class="big-pct {cls}">{_fmt_pct(p)}</div>'
+        sign = "+" if diff >= 0 else ""
+        pts_html = (
+            f'<div class="big-pts {cls}">{sign}{diff:,.2f} 點</div>'
+        )
 
-    right = pct_html or '<div class="big-pct flat">—</div>'
+    right = (pct_html + pts_html) or '<div class="big-pct flat">—</div>'
     d = data.digest
     stat_line = (
         f"proxy {d.total_members} 檔｜漲 {d.advancers}／平 {d.unchanged}／跌 {d.decliners}　"
@@ -166,7 +174,12 @@ def _render_index_card(data: HtmlReportData) -> str:
         f'<div><div class="lab">收盤</div><div class="val">{bar.close:,.2f}</div></div>'
         f'</div>'
     )
-    vol = f"成交 {_fmt_yi(bar.trading_money)}元｜量 {bar.volume / 1e8:,.2f} 億股"
+    if bar.trading_money or bar.volume:
+        vol = (
+            f"成交 {_fmt_yi(bar.trading_money)}元｜量 {bar.volume / 1e8:,.2f} 億股"
+        )
+    else:
+        vol = "成交 / 量（FinMind 未回傳，請見 FMTQIK 補充）"
     return f'''<div class="card"><h2>大盤指數 · OHLC</h2>
       {ohlc}
       <div class="stat-line" style="margin-top:10px">{_esc(vol)}</div>

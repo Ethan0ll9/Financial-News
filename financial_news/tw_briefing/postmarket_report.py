@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -9,9 +10,14 @@ from zoneinfo import ZoneInfo
 from config.settings import Settings
 from financial_news.image_uploader import ImageUploader
 from financial_news.line_notifier import LineNotifier
-from financial_news.tw_briefing.briefing_state import BriefingState, load_state, utc_now_iso
+from financial_news.tw_briefing.briefing_state import (
+    BriefingEventRecord,
+    BriefingState,
+    load_state,
+    utc_now_iso,
+)
 from financial_news.tw_briefing.chart_builder import DashboardInput, render_dashboard_png
-from financial_news.tw_briefing.finmind_client import FinMindClient
+from financial_news.tw_briefing.finmind_client import FinMindClient, IndexBar
 from financial_news.tw_briefing.flex_builder import build_briefing_bubble
 from financial_news.tw_briefing.html_report import HtmlReportData, write_html_report
 from financial_news.tw_briefing.market_queries import (
@@ -26,10 +32,24 @@ from financial_news.tw_briefing.market_queries import (
 from financial_news.tw_briefing.market_text import describe_index_session, pct_change
 from financial_news.tw_briefing.theme_detect import build_market_digest
 from financial_news.tw_briefing.tw_calendar import TwCalendar
+from financial_news.tw_briefing.twse_market import market_totals_on
 from financial_news.utils import setup_logger
 
 logger = setup_logger(__name__)
 _TZ_TW = ZoneInfo("Asia/Taipei")
+
+
+_KIND_LABEL = {
+    "exdiv": "🟢 除權息",
+    "suspended": "⛔ 停復牌",
+    "attention": "⚠️ 注意股",
+    "disposal": "🚫 處置股",
+    "shareholder_meeting": "📋 股東會",
+    "short_cover": "🔁 融券強制回補",
+    "earnings": "💰 財報公告",
+    "conference": "🎤 法說會",
+    "material_news": "📣 重大訊息",
+}
 
 
 def _event_verify_text(
@@ -38,25 +58,67 @@ def _event_verify_text(
     state: Optional[BriefingState],
     meta_map: Optional[Dict[str, StockMeta]] = None,
 ) -> str:
-    lines = ["【事件驗證（盤前關注 vs 當日收盤）】", ""]
+    lines = ["【事件驗證（盤前列管 vs 當日收盤）】", ""]
     if not state or not state.events:
         lines.append("（無盤前 state 或當日無列管事件；若剛啟用模組屬正常）")
         return "\n".join(lines)
-    tickers = list(dict.fromkeys([e.stock_id for e in state.events if e.stock_id]))
-    for tid in tickers:
-        bars = stock_bars(client, tid, session, n=2)
-        name = ""
-        if meta_map and tid in meta_map:
-            name = meta_map[tid].name
-        label = f"{tid} {name}" if name else tid
-        if len(bars) < 2:
-            lines.append(f"・{label}：資料不足")
+
+    # 依 kind 分組，保留輸入順序
+    by_kind: Dict[str, List[BriefingEventRecord]] = {}
+    for ev in state.events:
+        if not ev.stock_id:
             continue
+        by_kind.setdefault(ev.kind or "other", []).append(ev)
+
+    # 收盤資料以代號 cache，避免同一檔多事件重抓
+    pct_cache: Dict[str, Optional[tuple]] = {}
+
+    def _fetch_pct(sid: str):
+        if sid in pct_cache:
+            return pct_cache[sid]
+        bars = stock_bars(client, sid, session, n=2)
+        if len(bars) < 2:
+            pct_cache[sid] = None
+            return None
         a, b = bars[-2], bars[-1]
         r = pct_change(a.close, b.close)
-        sign = "+" if r >= 0 else ""
-        lines.append(f"・{label} 收 {b.close:,.2f}（{sign}{r:.2f}%）")
-    return "\n".join(lines)
+        pct_cache[sid] = (b.close, r)
+        return pct_cache[sid]
+
+    kind_order = [
+        "earnings",
+        "shareholder_meeting",
+        "conference",
+        "material_news",
+        "short_cover",
+        "exdiv",
+        "suspended",
+        "attention",
+        "disposal",
+    ]
+    seen_kinds = [k for k in kind_order if k in by_kind] + [
+        k for k in by_kind if k not in kind_order
+    ]
+
+    for k in seen_kinds:
+        head = _KIND_LABEL.get(k, k)
+        lines.append(f"— {head}（{len(by_kind[k])} 檔）")
+        for ev in by_kind[k]:
+            sid = ev.stock_id
+            name = ""
+            if meta_map and sid in meta_map:
+                name = meta_map[sid].name
+            label = f"{sid} {name}" if name else sid
+            extra = f"｜{ev.label}" if ev.label else ""
+            res = _fetch_pct(sid)
+            if not res:
+                lines.append(f"・{label}{extra}：資料不足")
+                continue
+            close, r = res
+            sign = "+" if r >= 0 else ""
+            lines.append(f"・{label}{extra} 收 {close:,.2f}（{sign}{r:.2f}%）")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _text_block_to_html(text: str) -> str:
@@ -127,6 +189,23 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
         pb = stock_bars(client, idx_id, prev, n=1)
         if pb:
             prev_close = pb[-1].close
+
+    # 用 TWSE FMTQIK 補全大盤總成交與漲跌點數（FinMind TaiwanStockPrice
+    # 對 TAIEX 不會回 trading_money/volume，且無精確漲跌點）
+    if idx_bars:
+        totals = market_totals_on(today)
+        if totals is not None:
+            last = idx_bars[-1]
+            new_last = replace(
+                last,
+                trading_money=totals.trade_value_yuan or last.trading_money,
+                volume=totals.trade_volume_shares or last.volume,
+            )
+            idx_bars = idx_bars[:-1] + [new_last]
+            if (not prev_close) and totals.taiex_close and totals.change_pts is not None:
+                prev_close = totals.taiex_close - totals.change_pts
+        else:
+            logger.warning("FMTQIK 未取得 %s 之大盤總成交，將顯示『資料缺』", today)
 
     idx_txt = (
         describe_index_session(idx_bars[-1], prev_close)

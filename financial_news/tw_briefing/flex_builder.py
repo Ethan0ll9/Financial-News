@@ -112,10 +112,14 @@ def _index_block(
         return items
 
     pct_text = "—"
+    pts_text = ""
     pct_color = _COLOR_FLAT
     if prev_close and prev_close > 0:
         p = (bar.close - prev_close) / prev_close * 100.0
+        diff = bar.close - prev_close
         pct_text = _fmt_pct(p)
+        sign = "+" if diff >= 0 else ""
+        pts_text = f"{sign}{diff:,.2f} 點"
         pct_color = _pct_color(p)
 
     items.append(
@@ -151,9 +155,21 @@ def _index_block(
             ],
         }
     )
+    if pts_text:
+        items.append(
+            {
+                "type": "text",
+                "text": pts_text,
+                "color": pct_color,
+                "size": "sm",
+                "weight": "bold",
+                "align": "end",
+            }
+        )
     items.append(_separator("sm"))
     items.append(_kv("開 / 高 / 低", f"{bar.open:,.0f} / {bar.high:,.0f} / {bar.low:,.0f}"))
-    items.append(_kv("成交量", f"{_fmt_yi(bar.trading_money)}元"))
+    if bar.trading_money:
+        items.append(_kv("成交金額", f"{_fmt_yi(bar.trading_money)}元"))
     return items
 
 

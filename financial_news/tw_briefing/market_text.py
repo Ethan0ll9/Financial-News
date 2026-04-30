@@ -29,9 +29,13 @@ def describe_index_session(bar: IndexBar, prev_close: Optional[float]) -> str:
 
     chg = ""
     if prev_close and prev_close > 0:
+        diff = bar.close - prev_close
         p = pct_change(prev_close, bar.close)
         sign = "+" if p >= 0 else ""
-        chg = f"漲跌幅約 {sign}{p:.2f}%（昨收 {prev_close:.2f} → 收 {bar.close:.2f}）"
+        chg = (
+            f"漲跌 {sign}{diff:.2f} 點（{sign}{p:.2f}%）"
+            f"（昨收 {prev_close:.2f} → 收 {bar.close:.2f}）"
+        )
     else:
         chg = f"收 {bar.close:.2f} 點"
 

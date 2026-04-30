@@ -134,10 +134,14 @@ def _draw_header(ax, data: DashboardInput) -> None:
     prev = data.index_prev_close
 
     pct_txt = ""
+    pts_txt = ""
     pct_color = _COLOR_TEXT
     if bar and prev and prev > 0:
         p = (bar.close - prev) / prev * 100.0
+        diff = bar.close - prev
         pct_txt = _fmt_pct(p)
+        pts_sign = "+" if diff >= 0 else ""
+        pts_txt = f"{pts_sign}{diff:,.2f} 點"
         pct_color = _color_by_pct(p)
 
     ax.text(
@@ -183,15 +187,27 @@ def _draw_header(ax, data: DashboardInput) -> None:
     if pct_txt:
         ax.text(
             0.99,
-            0.50,
+            0.62,
             pct_txt,
-            fontsize=38,
+            fontsize=36,
             fontweight="bold",
             color=pct_color,
             transform=ax.transAxes,
             ha="right",
             va="center",
         )
+        if pts_txt:
+            ax.text(
+                0.99,
+                0.36,
+                pts_txt,
+                fontsize=14,
+                fontweight="bold",
+                color=pct_color,
+                transform=ax.transAxes,
+                ha="right",
+                va="center",
+            )
 
     d = data.digest
     if d.total_members:

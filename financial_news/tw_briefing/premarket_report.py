@@ -34,7 +34,22 @@ from financial_news.tw_briefing.market_text import describe_index_session
 from financial_news.tw_briefing.official_events import parse_suspended_row
 from financial_news.tw_briefing.theme_detect import build_market_digest
 from financial_news.tw_briefing.tw_calendar import TwCalendar
+from financial_news.tw_briefing.twse_announcements import (
+    AttentionStock,
+    DisposalStock,
+    ShareholderMeeting,
+    attentions_on,
+    disposals_on,
+    fetch_attention_stocks,
+    fetch_disposal_stocks,
+    fetch_shareholder_meetings,
+    shareholder_meetings_on,
+    short_cover_on,
+)
+from financial_news.tw_briefing.twse_market import market_totals_on
 from financial_news.utils import setup_logger
+
+from dataclasses import replace
 
 logger = setup_logger(__name__)
 _TZ_TW = ZoneInfo("Asia/Taipei")
@@ -96,10 +111,17 @@ def _format_today_events(
     today: date,
     tw48_rows: list,
     suspended_parsed: List,
+    *,
+    attention: Optional[List[AttentionStock]] = None,
+    disposal: Optional[List[DisposalStock]] = None,
+    sh_meetings: Optional[List[ShareholderMeeting]] = None,
+    short_cover: Optional[List[ShareholderMeeting]] = None,
 ) -> str:
-    lines = ["【今日重點（除權息／停復牌）】", ""]
+    lines = ["【今日重點（除權息／停復牌／注意處置／股東會／融券回補）】", ""]
+    initial_len = len(lines)
+
     for e in events_on_date(tw48_rows, today):
-        lines.append(f"・{e.stock_id} {e.stock_name}｜{e.note}（除息日 {e.ex_date}）")
+        lines.append(f"・除權息｜{e.stock_id} {e.stock_name}｜{e.note}（除息日 {e.ex_date}）")
     for ev in suspended_parsed:
         try:
             ad = datetime.strptime(ev.announce_date[:10], "%Y-%m-%d").date()
@@ -109,7 +131,25 @@ def _format_today_events(
             lines.append(
                 f"・停復牌｜{ev.stock_id} 公告 {ev.announce_date}，復牌 {ev.resumption_date or '—'}"
             )
-    if len(lines) == 2:
+
+    for a in (attention or []):
+        lines.append(f"・注意股｜{a.stock_id} {a.stock_name}｜{a.note or '異常波動'}")
+    for d in (disposal or []):
+        lines.append(
+            f"・處置股｜{d.stock_id} {d.stock_name}｜{d.measure}｜{d.reason}｜期間 {d.period}"
+        )
+    for m in (sh_meetings or []):
+        meet = m.meeting_date.isoformat() if m.meeting_date else "—"
+        lines.append(f"・股東會｜{m.stock_id} {m.stock_name}｜{m.meeting_kind} {meet}")
+    for s in (short_cover or []):
+        meet = s.meeting_date.isoformat() if s.meeting_date else "—"
+        lines.append(
+            f"・融券回補｜{s.stock_id} {s.stock_name}｜停過戶起 "
+            f"{s.book_close_start.isoformat() if s.book_close_start else '—'}"
+            f"（會 {meet}）"
+        )
+
+    if len(lines) == initial_len:
         lines.append("（今日 TWSE 預告表無列管／或暫無資料）")
     return "\n".join(lines)
 
@@ -166,6 +206,14 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
         logger.warning("TaiwanStockSuspended 略過: %s", e)
         sus_raw = []
 
+    attention_all = fetch_attention_stocks()
+    disposal_all = fetch_disposal_stocks()
+    meetings_all = fetch_shareholder_meetings()
+    today_attention = attentions_on(attention_all, today)
+    today_disposal = disposals_on(disposal_all, today)
+    today_meetings = shareholder_meetings_on(meetings_all, today)
+    today_short_cover = short_cover_on(meetings_all, today)
+
     rss_items = get_digest_rss_items()
     macro_txt = format_macro_from_rss(rss_items)
     tw_hint = format_tw_event_hints_from_rss(rss_items)
@@ -179,6 +227,20 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
         older = stock_bars(client, idx_id, prev_prev, n=1)
         if older:
             prev_close_for_idx = older[-1].close
+
+    # 用 TWSE FMTQIK 補上一交易日的大盤總成交與漲跌點數（FinMind TAIEX 缺）
+    if idx_bars:
+        totals = market_totals_on(prev)
+        if totals is not None:
+            last = idx_bars[-1]
+            new_last = replace(
+                last,
+                trading_money=totals.trade_value_yuan or last.trading_money,
+                volume=totals.trade_volume_shares or last.volume,
+            )
+            idx_bars = idx_bars[:-1] + [new_last]
+            if (not prev_close_for_idx) and totals.taiex_close and totals.change_pts is not None:
+                prev_close_for_idx = totals.taiex_close - totals.change_pts
 
     idx_line_text = (
         describe_index_session(idx_bars[-1], prev_close_for_idx)
@@ -238,7 +300,15 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
 
     # 今日／本週／國際 RSS 摘要放 extra_sections（HTML 版可見）
     sus_parsed = [x for x in (parse_suspended_row(r) for r in sus_raw) if x]
-    today_events_txt = _format_today_events(today, tw48_rows, sus_parsed)
+    today_events_txt = _format_today_events(
+        today,
+        tw48_rows,
+        sus_parsed,
+        attention=today_attention,
+        disposal=today_disposal,
+        sh_meetings=today_meetings,
+        short_cover=today_short_cover,
+    )
     show_weekly = (today.weekday() == 0) or (not settings.tw_weekly_briefing_only_monday)
     weekly_txt = ""
     if show_weekly:
@@ -359,6 +429,59 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
                     detail=f"復牌日 {ev.resumption_date}",
                 )
             )
+
+    # 注意股 / 處置股：列管當天觀察盤後是否續強或被打回（重點關注）
+    for a in today_attention:
+        watch.append(a.stock_id)
+        ev_records.append(
+            BriefingEventRecord(
+                kind="attention",
+                stock_id=a.stock_id,
+                label="注意股",
+                ref_date=a.announce_date.isoformat(),
+                detail=f"{a.stock_name}｜{a.note or '異常波動'}",
+            )
+        )
+    for d in today_disposal:
+        watch.append(d.stock_id)
+        ev_records.append(
+            BriefingEventRecord(
+                kind="disposal",
+                stock_id=d.stock_id,
+                label=f"處置股｜{d.measure}",
+                ref_date=d.announce_date.isoformat(),
+                detail=f"{d.stock_name}｜{d.reason}｜期間 {d.period}",
+            )
+        )
+
+    # 股東會 + 融券強制回補：常成為事件交易的觀察點
+    for m in today_meetings:
+        watch.append(m.stock_id)
+        meet = m.meeting_date.isoformat() if m.meeting_date else ""
+        ev_records.append(
+            BriefingEventRecord(
+                kind="shareholder_meeting",
+                stock_id=m.stock_id,
+                label=f"{m.meeting_kind}股東會",
+                ref_date=meet or today.isoformat(),
+                detail=m.stock_name,
+            )
+        )
+    for s in today_short_cover:
+        watch.append(s.stock_id)
+        ev_records.append(
+            BriefingEventRecord(
+                kind="short_cover",
+                stock_id=s.stock_id,
+                label="融券強制回補",
+                ref_date=today.isoformat(),
+                detail=(
+                    f"{s.stock_name}｜停過戶起 "
+                    f"{s.book_close_start.isoformat() if s.book_close_start else '—'}"
+                ),
+            )
+        )
+
     watch = list(dict.fromkeys([w for w in watch if w]))
 
     state = BriefingState(
