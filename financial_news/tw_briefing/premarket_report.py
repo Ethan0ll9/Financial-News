@@ -1,9 +1,8 @@
 """盤前台股簡報：組資料 → PNG / HTML / Flex，推播 LINE 並寫入 briefing state。"""
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 from config.settings import Settings
@@ -17,10 +16,16 @@ from financial_news.tw_briefing.briefing_state import (
 )
 from financial_news.tw_briefing.chart_builder import DashboardInput, render_dashboard_png
 from financial_news.tw_briefing.digest_context import get_digest_rss_items
-from financial_news.tw_briefing.exdividend import ExDividendEvent, events_in_date_range, events_on_date, fetch_twt48u_all
+from financial_news.tw_briefing.exdividend import events_on_date, fetch_twt48u_all
 from financial_news.tw_briefing.finmind_client import FinMindClient
 from financial_news.tw_briefing.flex_builder import build_briefing_bubble
 from financial_news.tw_briefing.html_report import HtmlReportData, write_html_report
+from financial_news.tw_briefing.event_window import (
+    collect_in_progress,
+    collect_lookahead,
+    format_in_progress_block,
+    format_lookahead_block,
+)
 from financial_news.tw_briefing.macro_from_rss import format_macro_from_rss, format_tw_event_hints_from_rss
 from financial_news.tw_briefing.market_queries import (
     format_sector_strength,
@@ -53,58 +58,6 @@ from dataclasses import replace
 
 logger = setup_logger(__name__)
 _TZ_TW = ZoneInfo("Asia/Taipei")
-
-
-def _format_weekly_table(
-    cal: TwCalendar,
-    week_days: List[date],
-    tw48_rows: list,
-    suspended_rows: list,
-    max_per_day: int,
-) -> str:
-    lines: List[str] = ["【本週事件總覽（除權息／停復牌）】", ""]
-    if not week_days:
-        lines.append("（本週無交易日）")
-        return "\n".join(lines)
-
-    monday = week_days[0] - timedelta(days=week_days[0].weekday()) if week_days else None
-    end_w = monday + timedelta(days=4) if monday else week_days[-1]
-    assert monday is not None
-    ex_week = events_in_date_range(tw48_rows, monday, end_w)
-    ex_by_day: Dict[date, List[ExDividendEvent]] = defaultdict(list)
-    for e in ex_week:
-        if monday <= e.ex_date <= end_w:
-            ex_by_day[e.ex_date].append(e)
-
-    sus: List = []
-    for row in suspended_rows:
-        ev = parse_suspended_row(row)
-        if ev:
-            sus.append(ev)
-
-    for d in week_days:
-        if not cal.is_trading_day(d):
-            continue
-        lines.append(f"— {d.isoformat()}（{['週一','週二','週三','週四','週五'][d.weekday()]}）")
-        chunk: List[str] = []
-        for e in ex_by_day.get(d, [])[:max_per_day]:
-            chunk.append(f"・除權息｜{e.stock_id} {e.stock_name}｜{e.note}")
-        for ev in sus:
-            try:
-                ad = datetime.strptime(ev.announce_date[:10], "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            if ad == d:
-                chunk.append(
-                    f"・停復牌｜{ev.stock_id} 公告日 {ev.announce_date} → 復牌日 {ev.resumption_date or '—'}"
-                )
-        if not chunk:
-            chunk.append("・（無 TWSE 除權息預告／暫無停復牌列管）")
-        lines.extend(chunk[:max_per_day])
-        if len(chunk) > max_per_day:
-            lines.append(f"  …等共 {len(chunk)} 筆")
-        lines.append("")
-    return "\n".join(lines).rstrip()
 
 
 def _format_today_events(
@@ -309,21 +262,32 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
         sh_meetings=today_meetings,
         short_cover=today_short_cover,
     )
-    show_weekly = (today.weekday() == 0) or (not settings.tw_weekly_briefing_only_monday)
-    weekly_txt = ""
-    if show_weekly:
-        week_days = cal.week_trading_days_full_week(today)
-        weekly_txt = _format_weekly_table(
-            cal, week_days, tw48_rows, sus_raw, settings.tw_weekly_events_max_per_day
-        )
+    # 滾動視窗：未來 N 個交易日的預告（取代舊「週一才有的本週列表」）
+    lookahead_items = collect_lookahead(
+        base_date=today,
+        cal=cal,
+        n_trading_days=settings.tw_events_lookahead_days,
+        include_kinds=settings.tw_events_lookahead_kinds,
+        tw48_rows=tw48_rows,
+        sh_meetings=meetings_all,
+        suspended=sus_parsed,
+    )
+    lookahead_txt = format_lookahead_block(lookahead_items, base_date=today)
+
+    in_progress_items = collect_in_progress(
+        today=today,
+        disposals=disposal_all,
+        sh_meetings=meetings_all,
+        include_disposal=("disposal" in settings.tw_events_inprogress_kinds),
+        include_book_close=("book_close" in settings.tw_events_inprogress_kinds),
+    )
+    in_progress_txt = format_in_progress_block(in_progress_items, today=today)
 
     extra_sections = [
-        {"title": "今日重點（除權息／停復牌）", "body_html": _text_block_to_html(today_events_txt)},
+        {"title": "今日重點（除權息／停復牌／注意處置／股東會／融券回補）", "body_html": _text_block_to_html(today_events_txt)},
+        {"title": f"近 {settings.tw_events_lookahead_days} 日事件預告", "body_html": _text_block_to_html(lookahead_txt)},
+        {"title": "進行中事件（期間覆蓋今日）", "body_html": _text_block_to_html(in_progress_txt)},
     ]
-    if weekly_txt:
-        extra_sections.insert(
-            0, {"title": "本週事件總覽", "body_html": _text_block_to_html(weekly_txt)}
-        )
     extra_sections.extend(
         [
             {"title": "族群強弱（詳）", "body_html": _text_block_to_html(sector_txt)},
@@ -374,7 +338,8 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
             digest=digest,
             image_url=image_url,
             today_events_txt=today_events_txt,
-            weekly_txt=weekly_txt,
+            lookahead_txt=lookahead_txt,
+            in_progress_txt=in_progress_txt,
             macro_txt=macro_txt,
             html_path=html_path,
             force_banner=(force and is_non_trading),
@@ -388,7 +353,8 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
             generated_at=generated_at,
             macro_txt=macro_txt,
             tw_hint=tw_hint,
-            weekly_txt=weekly_txt,
+            lookahead_txt=lookahead_txt,
+            in_progress_txt=in_progress_txt,
             today_events_txt=today_events_txt,
             prev=prev,
             idx_id=idx_id,
@@ -508,7 +474,8 @@ def _push_visual(
     digest,
     image_url: Optional[str],
     today_events_txt: str,
-    weekly_txt: str,
+    lookahead_txt: str,
+    in_progress_txt: str,
     macro_txt: str,
     html_path,
     force_banner: bool,
@@ -538,9 +505,11 @@ def _push_visual(
     tail_lines: List[str] = []
     if force_banner:
         tail_lines.append("【測試】本日非 FinMind 交易日；大盤／族群以上一交易日收盤為準。")
-    if weekly_txt:
-        tail_lines.append(weekly_txt)
     tail_lines.append(today_events_txt)
+    if lookahead_txt:
+        tail_lines.append(lookahead_txt)
+    if in_progress_txt:
+        tail_lines.append(in_progress_txt)
     tail_lines.append(macro_txt)
     tail_lines.append(f"📎 本機儀表板：{html_path}")
     tail_text = "\n\n".join([t for t in tail_lines if t])
@@ -559,7 +528,8 @@ def _build_text_fallback(
     generated_at: str,
     macro_txt: str,
     tw_hint: str,
-    weekly_txt: str,
+    lookahead_txt: str,
+    in_progress_txt: str,
     today_events_txt: str,
     prev: date,
     idx_id: str,
@@ -587,10 +557,13 @@ def _build_text_fallback(
             "",
         ]
     )
-    if weekly_txt:
-        parts.append(weekly_txt)
-        parts.append("")
     parts.append(today_events_txt)
+    parts.append("")
+    if lookahead_txt:
+        parts.append(lookahead_txt)
+        parts.append("")
+    if in_progress_txt:
+        parts.append(in_progress_txt)
     parts.append("")
     parts.append(f"【上個交易日（{prev}）大盤摘要】")
     parts.append(f"加權（{idx_id}）：{idx_line_text}")

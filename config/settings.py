@@ -124,7 +124,9 @@ class Settings:
         if self.tw_sector_leaders_per_industry > 10:
             self.tw_sector_leaders_per_industry = 10
 
-        self.tw_weekly_briefing_only_monday = _bool_env("TW_WEEKLY_BRIEFING_ONLY_MONDAY", True)
+        # DEPRECATED: 由 TW_EVENTS_LOOKAHEAD_DAYS（滾動視窗）取代；保留欄位避免讀取錯誤，
+        # 但 premarket 已不再使用（永遠採用滾動視窗）
+        self.tw_weekly_briefing_only_monday = _bool_env("TW_WEEKLY_BRIEFING_ONLY_MONDAY", False)
         # FinMind TaiwanStockPrice：加權指數請用 TAIEX（IX0001 常回空）
         self.tw_index_stock_id = os.getenv("TW_INDEX_STOCK_ID", "TAIEX").strip() or "TAIEX"
         _default_proxies = (
@@ -161,6 +163,33 @@ class Settings:
             self.tw_weekly_events_max_per_day = 1
         if self.tw_weekly_events_max_per_day > 20:
             self.tw_weekly_events_max_per_day = 20
+
+        # 滾動視窗：今日 + 未來 N 個交易日的事件預告
+        self.tw_events_lookahead_days = int(os.getenv("TW_EVENTS_LOOKAHEAD_DAYS", "5"))
+        if self.tw_events_lookahead_days < 0:
+            self.tw_events_lookahead_days = 0
+        if self.tw_events_lookahead_days > 20:
+            self.tw_events_lookahead_days = 20
+
+        # 預告涵蓋哪些事件 kind（逗號分隔）；預設核心三項
+        # 可選：exdiv,shareholder_meeting,short_cover,suspended_resume
+        _kinds = os.getenv(
+            "TW_EVENTS_LOOKAHEAD_KINDS",
+            "exdiv,shareholder_meeting,short_cover",
+        )
+        self.tw_events_lookahead_kinds = [
+            k.strip() for k in _kinds.split(",") if k.strip()
+        ]
+
+        # 進行中區塊涵蓋哪些 kind（逗號分隔）
+        # 可選：disposal,book_close
+        _ip = os.getenv("TW_EVENTS_INPROGRESS_KINDS", "disposal,book_close")
+        self.tw_events_inprogress_kinds = [
+            k.strip() for k in _ip.split(",") if k.strip()
+        ]
+
+        # 盤後是否附「明日預告」精簡列
+        self.tw_postmarket_show_next_day = _bool_env("TW_POSTMARKET_SHOW_NEXT_DAY", True)
 
         # 視覺化與推送
         self.imgbb_api_key = os.getenv("IMGBB_API_KEY", "").strip()

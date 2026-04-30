@@ -50,6 +50,20 @@ class TwCalendar:
                 return d
         return None
 
+    def next_n_trading_days(self, ref: date, n: int) -> List[date]:
+        """從 ref 之後（不含 ref 本身）數出 n 個交易日；不足則回傳實際可達的數量。"""
+        out: List[date] = []
+        if n <= 0:
+            return out
+        d = ref
+        for _ in range(n * 5):  # 假設最多 5 倍（連假等）
+            d = d + timedelta(days=1)
+            if d in self.trading_days:
+                out.append(d)
+                if len(out) >= n:
+                    return out
+        return out
+
     def week_trading_days(self, ref: date) -> List[date]:
         """該曆週（週一～週五）內的交易日，且日期 >= ref（用於週一列出本週剩餘）。"""
         monday = ref - timedelta(days=ref.weekday())

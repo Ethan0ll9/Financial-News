@@ -17,9 +17,16 @@ from financial_news.tw_briefing.briefing_state import (
     utc_now_iso,
 )
 from financial_news.tw_briefing.chart_builder import DashboardInput, render_dashboard_png
+from financial_news.tw_briefing.event_window import (
+    collect_lookahead,
+    format_next_day_brief,
+)
+from financial_news.tw_briefing.exdividend import fetch_twt48u_all
 from financial_news.tw_briefing.finmind_client import FinMindClient, IndexBar
 from financial_news.tw_briefing.flex_builder import build_briefing_bubble
 from financial_news.tw_briefing.html_report import HtmlReportData, write_html_report
+from financial_news.tw_briefing.official_events import parse_suspended_row
+from financial_news.tw_briefing.twse_announcements import fetch_shareholder_meetings
 from financial_news.tw_briefing.market_queries import (
     StockMeta,
     format_sector_strength,
@@ -41,7 +48,7 @@ _TZ_TW = ZoneInfo("Asia/Taipei")
 
 _KIND_LABEL = {
     "exdiv": "🟢 除權息",
-    "suspended": "⛔ 停復牌",
+    "suspended": "⛔ 暫停交易",
     "attention": "⚠️ 注意股",
     "disposal": "🚫 處置股",
     "shareholder_meeting": "📋 股東會",
@@ -245,6 +252,28 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
     state = load_state(settings.tw_state_dir, today.isoformat())
     verify_txt = _event_verify_text(client, today, state, meta_map=meta_map)
 
+    # 明日預告（D-1 精簡列；輕量再抓一次 TWSE 公告以拿最新狀態）
+    next_day_txt = ""
+    if settings.tw_postmarket_show_next_day:
+        next_td = cal.next_trading_day(today)
+        try:
+            tw48_rows = fetch_twt48u_all()
+            sus_rows = client.fetch_suspended(today.isoformat(), today.isoformat())
+            sus_parsed = [x for x in (parse_suspended_row(r) for r in sus_rows) if x]
+            sh_meetings = fetch_shareholder_meetings()
+            la_items = collect_lookahead(
+                base_date=today,
+                cal=cal,
+                n_trading_days=1,
+                include_kinds=settings.tw_events_lookahead_kinds,
+                tw48_rows=tw48_rows,
+                sh_meetings=sh_meetings,
+                suspended=sus_parsed,
+            )
+            next_day_txt = format_next_day_brief(la_items, next_trading_day=next_td)
+        except Exception as e:  # 任何下游 API 失敗都不要影響盤後本體
+            logger.warning("明日預告產製失敗，已忽略：%s", e)
+
     title = f"🌇 台股盤中走勢總結（{today.isoformat()}）"
     subtitle = "盤後｜大盤、熱門族群、熱門個股、事件驗證"
     generated_at = utc_now_iso()
@@ -273,10 +302,18 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
 
     extra_sections = [
         {"title": "事件驗證", "body_html": _text_block_to_html(verify_txt)},
-        {"title": "族群強弱（詳）", "body_html": _text_block_to_html(sector_txt)},
-        {"title": "成交活躍（詳）", "body_html": _text_block_to_html(turnover_txt)},
-        {"title": "指數敘述", "body_html": _text_block_to_html(f"加權（{idx_id}）：{idx_txt}")},
     ]
+    if next_day_txt:
+        extra_sections.append(
+            {"title": "明日預告", "body_html": _text_block_to_html(next_day_txt)}
+        )
+    extra_sections.extend(
+        [
+            {"title": "族群強弱（詳）", "body_html": _text_block_to_html(sector_txt)},
+            {"title": "成交活躍（詳）", "body_html": _text_block_to_html(turnover_txt)},
+            {"title": "指數敘述", "body_html": _text_block_to_html(f"加權（{idx_id}）：{idx_txt}")},
+        ]
+    )
 
     image_url: Optional[str] = None
     if png_path:
@@ -315,6 +352,7 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
             digest=digest,
             image_url=image_url,
             verify_txt=verify_txt,
+            next_day_txt=next_day_txt,
             html_path=html_path,
             force_banner=(force and is_non_trading),
         )
@@ -329,6 +367,7 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
             sector_txt=sector_txt,
             turnover_txt=turnover_txt,
             verify_txt=verify_txt,
+            next_day_txt=next_day_txt,
         )
         if not notifier.push_text_chunks(body):
             logger.error("盤後總結 LINE 發送失敗（文字 fallback）")
@@ -345,6 +384,7 @@ def _push_visual(
     digest,
     image_url: Optional[str],
     verify_txt: str,
+    next_day_txt: str,
     html_path,
     force_banner: bool,
 ) -> bool:
@@ -374,6 +414,8 @@ def _push_visual(
     if force_banner:
         tail_lines.append("【測試】本日非交易日；若無當日 K 線為正常。")
     tail_lines.append(verify_txt)
+    if next_day_txt:
+        tail_lines.append(next_day_txt)
     tail_lines.append(f"📎 本機儀表板：{html_path}")
     tail_text = "\n\n".join([t for t in tail_lines if t])
     if tail_text:
@@ -430,6 +472,7 @@ def _build_text_fallback(
     sector_txt: str,
     turnover_txt: str,
     verify_txt: str,
+    next_day_txt: str = "",
 ) -> str:
     parts: List[str] = []
     if force and is_non_trading:
@@ -450,4 +493,7 @@ def _build_text_fallback(
             verify_txt,
         ]
     )
+    if next_day_txt:
+        parts.append("")
+        parts.append(next_day_txt)
     return "\n".join(parts)
