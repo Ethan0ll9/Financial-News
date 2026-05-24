@@ -8,7 +8,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from config.settings import settings
-from financial_news.line_notifier import LineNotifier
+from financial_news.notify_hub import NotifyHub
 from financial_news.models import NewsItem
 from financial_news.sources.base import NewsSource
 from financial_news.sources.cnyes import CnyesPopularSource
@@ -88,10 +88,7 @@ def run_digest() -> None:
     """擷取所有啟用來源並推播（單次）。"""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     reset_digest_rss_items()
-    notifier = LineNotifier(
-        settings.line_channel_access_token,
-        settings.line_user_id,
-    )
+    notifier = NotifyHub(settings)
     sources = build_sources()
     if not sources:
         logger.warning("未設定任何新聞來源，請檢查 .env（CNYES_ENABLED / RSS）")
@@ -132,10 +129,7 @@ def run_morning_sequence(*, force_premarket: bool = False) -> None:
             run_premarket(settings, force=force_premarket)
         except Exception as e:
             logger.exception("盤前簡報失敗: %s", e)
-            LineNotifier(
-                settings.line_channel_access_token,
-                settings.line_user_id,
-            ).push_text_chunks(f"❌ 台股盤前簡報執行錯誤\n\n{e}")
+            NotifyHub(settings).push_text_chunks(f"❌ 台股盤前簡報執行錯誤\n\n{e}")
 
 
 def run_postmarket_briefing(*, force: bool = False) -> None:
@@ -147,10 +141,7 @@ def run_postmarket_briefing(*, force: bool = False) -> None:
         run_postmarket(settings, force=force)
     except Exception as e:
         logger.exception("盤後總結失敗: %s", e)
-        LineNotifier(
-            settings.line_channel_access_token,
-            settings.line_user_id,
-        ).push_text_chunks(f"❌ 台股盤後總結執行錯誤\n\n{e}")
+        NotifyHub(settings).push_text_chunks(f"❌ 台股盤後總結執行錯誤\n\n{e}")
 
 
 class NewsScheduler:

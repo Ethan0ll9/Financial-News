@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from config.settings import Settings
 from financial_news.image_uploader import ImageUploader
-from financial_news.line_notifier import LineNotifier
+from financial_news.notify_hub import NotifyHub
 from financial_news.tw_briefing.briefing_state import (
     BriefingEventRecord,
     BriefingState,
@@ -144,7 +144,7 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
 
     now = datetime.now(_TZ_TW)
     today = now.date()
-    notifier = LineNotifier(settings.line_channel_access_token, settings.line_user_id)
+    notifier = NotifyHub(settings)
     client = FinMindClient(settings.finmind_token, cache_dir=settings.tw_state_dir)
 
     try:
@@ -381,7 +381,7 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
 
 def _push_visual(
     *,
-    notifier: LineNotifier,
+    notifier: NotifyHub,
     title: str,
     subtitle: str,
     idx_id: str,

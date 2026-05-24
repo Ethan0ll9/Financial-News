@@ -24,3 +24,11 @@ IMGBB_UPLOAD_URL = "https://api.imgbb.com/1/upload"
 # ---- Cnyes ------------------------------------------------------------------
 CNYES_POPULAR_URL = "https://api.cnyes.com/media/api/v1/newslist/popular"
 CNYES_ARTICLE_URL_TEMPLATE = "https://news.cnyes.com/news/id/{news_id}"
+
+# ---- Telegram Bot API -------------------------------------------------------
+TELEGRAM_API_BASE = "https://api.telegram.org/bot"
+
+
+def telegram_api_url(bot_token: str, method: str) -> str:
+    """組出 ``https://api.telegram.org/bot<token>/<method>``。"""
+    return f"{TELEGRAM_API_BASE}{bot_token}/{method}"

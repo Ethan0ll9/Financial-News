@@ -56,6 +56,11 @@ class Settings:
         self.line_channel_access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
         self.line_user_id = os.getenv("LINE_USER_ID", "").strip()
 
+        # Telegram Bot API（選用；與 LINE 並行推播）
+        self.telegram_enabled = _bool_env("TELEGRAM_ENABLED", False)
+        self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
         self.top_n = int(os.getenv("TOP_N", "10"))
 
         # RSS：每個 feed 最多取幾則（與 TOP_N 分開；TOP_N 仍用於鉅亨等單一來源）
