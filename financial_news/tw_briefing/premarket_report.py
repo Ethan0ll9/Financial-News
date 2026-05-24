@@ -521,16 +521,10 @@ def _push_visual(
     )
     messages.append({"type": "flex", "altText": title[:400], "contents": bubble})
 
-    if image_url:
-        messages.append(
-            {
-                "type": "image",
-                "originalContentUrl": image_url,
-                "previewImageUrl": image_url,
-            }
-        )
+    # 移除重複的獨立 image 訊息：Flex bubble 的 hero 已含同一張儀表板圖，
+    # 額外推一則 image 會佔用 LINE 月配額且畫面重複（user reported 2026-05）。
 
-    # 先送 flex + image
+    # 送 flex（單則訊息即可）
     ok = notifier.push_messages(messages)
 
     # tail 文字（事件、預告、進行中、海外摘要）以 push_text_chunks 分批送，避免截斷

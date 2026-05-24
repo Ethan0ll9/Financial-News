@@ -84,6 +84,10 @@ class CnyesPopularSource(NewsSource):
                     title=str(title).strip(),
                     url=str(link).strip(),
                     source_label=self.name,
+                    # 鉅亨網本身為台灣媒體；標上 region 讓 digest 過濾邏輯
+                    # 可判斷為台媒並保留（避免被 LINE 精簡規則濾掉）。
+                    region="🇹🇼 台灣",
+                    outlet=f"鉅亨網（{self._category}）",
                 )
             )
         return out

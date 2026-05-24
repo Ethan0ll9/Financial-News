@@ -34,6 +34,19 @@ def _priority_tag(priority: str | None) -> str:
     return ""
 
 
+def _is_line_eligible(item: NewsItem) -> bool:
+    """LINE digest 精簡規則：只保留高重要性或台灣媒體。
+
+    LINE Messaging API 免費額度每月 200 則，先前每次 digest 一次推送多區域所有
+    來源會很快耗盡，因此這裡聚焦保留：
+    - ``priority == "high"`` 的國際與本地重要報導
+    - ``region`` 含「台灣」的所有來源（含鉅亨網 popular）
+    """
+    priority = (item.priority or "").strip().lower()
+    region = item.region or ""
+    return priority == "high" or "台灣" in region
+
+
 def build_sources() -> List[NewsSource]:
     sources: List[NewsSource] = []
     if settings.cnyes_enabled:
@@ -94,12 +107,19 @@ def run_digest() -> None:
             notifier.push_text_chunks(err_msg)
             continue
 
-        body = _format_block(src, items, ts)
+        # macro 用：保留**全部** RSS items（國際總體摘要仍需多區域素材）
+        if isinstance(src, RssFeedSource):
+            set_digest_rss_items(items)
+
+        # LINE 推播：精簡為 High + 台媒，避免月配額（200 則）過早耗盡
+        line_items = [it for it in items if _is_line_eligible(it)]
+        if not line_items:
+            logger.info("來源 %s 精簡後無可推送項目，略過 LINE", src.name)
+            continue
+        body = _format_block(src, line_items, ts)
         header = f"📰 財經新聞摘要\n{'=' * 24}\n\n"
         if not notifier.push_text_chunks(header + body):
             logger.error("來源 %s LINE 發送失敗", src.name)
-        if isinstance(src, RssFeedSource):
-            set_digest_rss_items(items)
 
     logger.info("digest 完成")
 
