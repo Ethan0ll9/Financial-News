@@ -20,10 +20,18 @@ TWSE_MI_INDEX_URL = "https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX"
 TWSE_STOCK_DAY_ALL_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 # 上市公司基本資料（含實收資本額、已發行股數，用以推算市值）
 TWSE_COMPANY_INFO_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+# 上市公司每日重大訊息（公司自行公告：併購、業績預告、處分資產、董事會決議等）
+TWSE_MATERIAL_NEWS_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap04_L"
 
 # ---- TPEX OpenAPI -----------------------------------------------------------
 # 上櫃主板每日收盤行情（含 ETN/ETF 全商品，需自己過濾）
 TPEX_DAILY_CLOSE_QUOTES_URL = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+# 上櫃公司每日重大訊息（MOPS）
+TPEX_MATERIAL_NEWS_URL = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O"
+
+# ---- TAIFEX 台灣期交所 -------------------------------------------------------
+# 個股期貨保證金（級距 1/2/3 + 結算/維持/原始保證金比例）；無公開 API，HTML 解析
+TAIFEX_STOCK_MARGINING_URL = "https://www.taifex.com.tw/cht/5/stockMargining"
 
 # ---- LINE -------------------------------------------------------------------
 LINE_PUSH_MESSAGE_URL = "https://api.line.me/v2/bot/message/push"

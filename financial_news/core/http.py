@@ -114,6 +114,26 @@ class HttpClient:
         resp.raise_for_status()
         return resp.content
 
+    def get_text(
+        self,
+        url: str,
+        *,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        encoding: str = "utf-8",
+        timeout: Optional[float] = None,
+    ) -> str:
+        """GET → ``raise_for_status`` → ``.text``；強制指定 ``encoding`` 避免 mojibake。"""
+        resp = self._session.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=self._to(timeout),
+        )
+        resp.raise_for_status()
+        resp.encoding = encoding
+        return resp.text
+
     def post_json(
         self,
         url: str,

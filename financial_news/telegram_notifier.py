@@ -103,6 +103,7 @@ class TelegramNotifier:
         if resp.status_code == 200:
             body = resp.json()
             if body.get("ok"):
+                logger.info("Telegram %s 成功", method)
                 return True
             logger.error("Telegram %s ok=false: %s", method, body)
             return False

@@ -200,16 +200,22 @@ def format_lookahead_block(
     *,
     base_date: date,
     max_per_kind_per_day: int = 5,
+    watch_set: Optional[Iterable[str]] = None,
 ) -> str:
     """以「日期分組」格式化未來預告區塊。
 
     ``max_per_kind_per_day``：同一天同一種事件（如股東會）最多顯示幾筆，
-    超過以「及其他 N 家」摘要替代，避免大量股東會撐爆訊息長度。
+    超過以「及其他 N 家（非觀察清單）」摘要替代。
+
+    ``watch_set``：觀察清單個股，在每個 kind 群組內優先（★）排前面；
+    非觀察清單每 kind 每天最多 ``max_per_kind_per_day`` 筆，超過略去。
     """
     lines: List[str] = ["【近 5 日事件預告】", ""]
     if not items:
         lines.append("（未來 5 個交易日內無已知重點事件）")
         return "\n".join(lines)
+
+    ws: set = set(watch_set) if watch_set is not None else set()
 
     by_day: Dict[date, List[LookaheadItem]] = defaultdict(list)
     for it in items:
@@ -218,24 +224,28 @@ def format_lookahead_block(
         first = by_day[d][0]
         cd = _countdown_label(first.countdown)
         lines.append(f"— {d.isoformat()}（{cd}）")
-        # 按 kind 分組，各 kind 分別限制顯示筆數
         by_kind: Dict[str, List[LookaheadItem]] = defaultdict(list)
         for it in by_day[d]:
             by_kind[it.kind].append(it)
         for kind in sorted(by_kind.keys()):
             kind_items = by_kind[kind]
-            shown = kind_items[:max_per_kind_per_day]
-            overflow = len(kind_items) - len(shown)
-            for it in shown:
-                label = _KIND_LABEL.get(it.kind, it.kind)
-                emoji = _emoji(it.kind)
+            label = _KIND_LABEL.get(kind, kind)
+            emoji = _emoji(kind)
+            # watchlist 優先
+            watch_items = [x for x in kind_items if x.stock_id in ws]
+            other_items = [x for x in kind_items if x.stock_id not in ws]
+            shown_other = other_items[:max_per_kind_per_day]
+            overflow = len(other_items) - len(shown_other)
+            for it in watch_items:
+                name = f" {it.stock_name}" if it.stock_name else ""
+                note = f"｜{it.note}" if it.note else ""
+                lines.append(f"・★ {emoji} {label}｜{it.stock_id}{name}{note}")
+            for it in shown_other:
                 name = f" {it.stock_name}" if it.stock_name else ""
                 note = f"｜{it.note}" if it.note else ""
                 lines.append(f"・{emoji} {label}｜{it.stock_id}{name}{note}")
             if overflow > 0:
-                label = _KIND_LABEL.get(kind, kind)
-                emoji = _emoji(kind)
-                lines.append(f"・{emoji} {label}｜及其他 {overflow} 家")
+                lines.append(f"・{emoji} {label}｜及其他 {overflow} 家（非觀察清單）")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -309,16 +319,19 @@ def format_in_progress_block(
     *,
     today: date,
     max_per_kind: int = 10,
+    watch_set: Optional[Iterable[str]] = None,
 ) -> str:
     """格式化進行中事件。
 
-    ``max_per_kind``：每種事件最多明細幾筆（預設 10），超過以「及其他 N 家」代替。
-    stock_close 通常達數百筆，預設值可有效壓縮訊息長度。
+    ``max_per_kind``：非觀察清單個股每種事件最多明細幾筆，超過以「及其他 N 家」代替。
+    ``watch_set``：觀察清單個股加 ★ 優先排前面，全部顯示。
     """
     lines: List[str] = ["【進行中事件（期間覆蓋今日）】", ""]
     if not items:
         lines.append("（今日無進行中之處置／停止過戶期間）")
         return "\n".join(lines)
+
+    ws: set = set(watch_set) if watch_set is not None else set()
 
     grouped: Dict[str, List[InProgressItem]] = defaultdict(list)
     for it in items:
@@ -332,10 +345,13 @@ def format_in_progress_block(
         if k not in grouped:
             continue
         all_items = grouped[k]
-        shown = all_items[:max_per_kind]
-        overflow = len(all_items) - len(shown)
+        watch_items = [x for x in all_items if x.stock_id in ws]
+        other_items = [x for x in all_items if x.stock_id not in ws]
+        shown_other = other_items[:max_per_kind]
+        overflow = len(other_items) - len(shown_other)
         lines.append(f"— {section_titles[k]}（{len(all_items)} 檔）")
-        for it in shown:
+        for it in watch_items + shown_other:
+            star = "★ " if it.stock_id in ws else ""
             remaining = ""
             if it.period_end:
                 days = (it.period_end - today).days
@@ -344,10 +360,10 @@ def format_in_progress_block(
             if it.period_start and it.period_end:
                 period = f"{it.period_start.isoformat()} ~ {it.period_end.isoformat()}"
             lines.append(
-                f"・{it.stock_id} {it.stock_name}｜{it.detail}｜{period}{remaining}"
+                f"・{star}{it.stock_id} {it.stock_name}｜{it.detail}｜{period}{remaining}"
             )
         if overflow > 0:
-            lines.append(f"・（及其他 {overflow} 家，完整清單見 HTML 報告）")
+            lines.append(f"・（及其他 {overflow} 家非觀察清單，完整清單見 HTML 報告）")
         lines.append("")
     return "\n".join(lines).rstrip()
 

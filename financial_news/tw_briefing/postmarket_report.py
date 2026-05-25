@@ -50,7 +50,18 @@ from financial_news.tw_briefing.market_queries import (
     stock_meta_map,
     weighted_index_bars,
 )
-from financial_news.tw_briefing.market_text import describe_index_session, pct_change
+from financial_news.tw_briefing.market_text import describe_index_session
+from financial_news.tw_briefing.mops_material_news import (
+    fetch_material_news,
+    format_material_news_block,
+)
+from financial_news.tw_briefing.taifex_margin import (
+    diff_margin,
+    fetch_stock_margining,
+    format_margin_block,
+    load_margin_snapshot,
+    save_margin_snapshot,
+)
 from financial_news.tw_briefing.theme_detect import build_market_digest
 from financial_news.tw_briefing.tw_calendar import TwCalendar
 from financial_news.tw_briefing.twse_market import market_totals_on
@@ -74,43 +85,35 @@ _KIND_LABEL = {
 
 
 def _event_verify_text(
-    client: FinMindClient,
-    session: date,
+    client: FinMindClient,  # noqa: ARG001 - 保留簽名相容，已不再抓盤後 K 線
+    session: date,  # noqa: ARG001
     state: Optional[BriefingState],
     meta_map: Optional[Dict[str, StockMeta]] = None,
 ) -> str:
-    lines = ["【事件驗證（盤前列管 vs 當日收盤）】", ""]
+    """簡化版事件列管：列出今日 watchlist 內的事件名單（不再帶當日漲跌結果）。
+
+    盤後個股漲跌可由圖片中的 watchlist 熱力圖直接看出，所以這裡不再呼叫
+    FinMind 抓 K 線；改成單純呈現「除權息 / 股東會 / 處置股 / 注意股 / 融券回補 / …」
+    名單。重大訊息（material_news）改由 :mod:`mops_material_news` 取得，不再混在此區段。
+    """
+    lines = ["【事件列管（盤前盤點清單）】", ""]
     if not state or not state.events:
         lines.append("（無盤前 state 或當日無列管事件；若剛啟用模組屬正常）")
         return "\n".join(lines)
 
-    # 依 kind 分組，保留輸入順序
     by_kind: Dict[str, List[BriefingEventRecord]] = {}
     for ev in state.events:
         if not ev.stock_id:
             continue
+        # material_news 改由 MOPS fetcher 提供完整資訊，不再從 state 撈
+        if (ev.kind or "") == "material_news":
+            continue
         by_kind.setdefault(ev.kind or "other", []).append(ev)
-
-    # 收盤資料以代號 cache，避免同一檔多事件重抓
-    pct_cache: Dict[str, Optional[tuple]] = {}
-
-    def _fetch_pct(sid: str):
-        if sid in pct_cache:
-            return pct_cache[sid]
-        bars = stock_bars(client, sid, session, n=2)
-        if len(bars) < 2:
-            pct_cache[sid] = None
-            return None
-        a, b = bars[-2], bars[-1]
-        r = pct_change(a.close, b.close)
-        pct_cache[sid] = (b.close, r)
-        return pct_cache[sid]
 
     kind_order = [
         "earnings",
         "shareholder_meeting",
         "conference",
-        "material_news",
         "short_cover",
         "exdiv",
         "suspended",
@@ -120,6 +123,10 @@ def _event_verify_text(
     seen_kinds = [k for k in kind_order if k in by_kind] + [
         k for k in by_kind if k not in kind_order
     ]
+
+    if not seen_kinds:
+        lines.append("（今日無列管事件）")
+        return "\n".join(lines)
 
     for k in seen_kinds:
         head = _KIND_LABEL.get(k, k)
@@ -131,13 +138,7 @@ def _event_verify_text(
                 name = meta_map[sid].name
             label = f"{sid} {name}" if name else sid
             extra = f"｜{ev.label}" if ev.label else ""
-            res = _fetch_pct(sid)
-            if not res:
-                lines.append(f"・{label}{extra}：資料不足")
-                continue
-            close, r = res
-            sign = "+" if r >= 0 else ""
-            lines.append(f"・{label}{extra} 收 {close:,.2f}（{sign}{r:.2f}%）")
+            lines.append(f"・{label}{extra}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -263,6 +264,37 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
     state = load_state(settings.tw_state_dir, today.isoformat())
     verify_txt = _event_verify_text(client, today, state, meta_map=meta_map)
 
+    # 重大訊息（MOPS）：watchlist 個股優先 + 限制總長避免推播被截
+    watch_set = set(settings.tw_market_proxy_stocks)
+    if state and state.watch_tickers:
+        watch_set.update(state.watch_tickers)
+    try:
+        material_news = fetch_material_news()
+        material_news_txt = format_material_news_block(
+            material_news,
+            watch_tickers=watch_set,
+            max_total=30,
+            max_watch=20,
+            max_other=10,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("抓取 MOPS 重大訊息失敗：%s", e)
+        material_news_txt = ""
+
+    # 個股期貨保證金調整：抓今日快照，與上一個交易日 diff
+    margin_txt = ""
+    try:
+        curr_rates = fetch_stock_margining()
+        if curr_rates:
+            if prev:
+                prev_rates = load_margin_snapshot(settings.tw_state_dir, prev)
+                changes = diff_margin(prev_rates, curr_rates)
+                margin_txt = format_margin_block(changes)
+            # 不論今日是否首次紀錄，都存今日快照給下次比對
+            save_margin_snapshot(settings.tw_state_dir, today, curr_rates)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("抓取 TAIFEX 保證金調整失敗：%s", e)
+
     # 明日預告（D-1 精簡列；輕量再抓一次 TWSE 公告以拿最新狀態）
     next_day_txt = ""
     if settings.tw_postmarket_show_next_day:
@@ -346,12 +378,17 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
         twse_quotes = mb.fetch_twse_quotes(shares_map=twse_shares)
         tpex_quotes = mb.fetch_tpex_quotes()
         # FinMind TPEx K 線：補 MI_INDEX 不含的「櫃買指數」收盤
-        tpex_bars = client.bars_on_or_before("TPEx", today, n=2)
-        tpex_pair = (
-            (tpex_bars[-2].close, tpex_bars[-1].close)
-            if len(tpex_bars) >= 2
-            else None
-        )
+        # 注意：data_id=TPEx 需付費方案；402 時退回成份股平均 pct，不影響圖生成
+        try:
+            tpex_bars = client.bars_on_or_before("TPEx", today, n=2)
+            tpex_pair = (
+                (tpex_bars[-2].close, tpex_bars[-1].close)
+                if len(tpex_bars) >= 2
+                else None
+            )
+        except Exception as _tpex_err:
+            logger.warning("TPEx 指數 K 線無法取得（可能需付費方案），退回成份股平均：%s", _tpex_err)
+            tpex_pair = None
         indices = build_index_summary(
             mi_index_rows=mi_index_rows,
             twse_quotes=twse_quotes,
@@ -420,6 +457,8 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
             overview_url=overview_url,
             watchlist_url=watchlist_url,
             verify_txt=verify_txt,
+            material_news_txt=material_news_txt,
+            margin_txt=margin_txt,
             next_day_txt=next_day_txt,
             html_path=html_path,
             force_banner=(force and is_non_trading),
@@ -432,8 +471,6 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
             generated_at=generated_at,
             idx_id=idx_id,
             idx_txt=idx_txt,
-            sector_txt=sector_txt,
-            turnover_txt=turnover_txt,
             verify_txt=verify_txt,
             next_day_txt=next_day_txt,
         )
@@ -448,6 +485,8 @@ def _push_visual(
     overview_url: Optional[str],
     watchlist_url: Optional[str],
     verify_txt: str,
+    material_news_txt: str,
+    margin_txt: str,
     next_day_txt: str,
     html_path,
     force_banner: bool,
@@ -455,6 +494,12 @@ def _push_visual(
     """v2：推 2 張公開 URL 圖（overview + watchlist）+ 文字 tail。
 
     LINE 與 Telegram 收到完全相同內容；若兩張圖都沒上傳成功則回 False，由呼叫端走文字 fallback。
+
+    文字 tail 送多則訊息以確保「重大訊息」與「期貨保證金調整」不會被單則上限截斷：
+      1. 圖①（overview） 2. 圖②（watchlist）
+      3. 重大訊息（watchlist 個股優先）
+      4. 個股期貨保證金調整
+      5. 事件列管 + 明日預告（合併送）
     """
     if not overview_url and not watchlist_url:
         logger.warning("v2 dashboard 兩張圖均無法上傳，改走文字 fallback")
@@ -473,9 +518,20 @@ def _push_visual(
         if not notifier.push_image(watchlist_url):
             ok = False
 
-    # tail 文字以 push_text_chunks 分批送，避免截斷
+    # 圖之後優先送「重大訊息」確保 watchlist 個股不被擠掉
+    if material_news_txt:
+        if not notifier.push_text_chunks(material_news_txt):
+            ok = False
+
+    # 接著「個股期貨保證金調整」
+    if margin_txt:
+        if not notifier.push_text_chunks(margin_txt):
+            ok = False
+
+    # 最後事件列管 + 明日預告 + 報告連結（合併一則，較不重要）
     tail_lines: List[str] = []
-    tail_lines.append(verify_txt)
+    if verify_txt:
+        tail_lines.append(verify_txt)
     if next_day_txt:
         tail_lines.append(next_day_txt)
     tail_lines.append(f"📎 本機儀表板：{html_path}")
@@ -532,8 +588,6 @@ def _build_text_fallback(
     generated_at: str,
     idx_id: str,
     idx_txt: str,
-    sector_txt: str,
-    turnover_txt: str,
     verify_txt: str,
     next_day_txt: str = "",
 ) -> str:
@@ -548,10 +602,6 @@ def _build_text_fallback(
             "",
             f"【大盤】加權（{idx_id}）",
             idx_txt,
-            "",
-            sector_txt,
-            "",
-            turnover_txt,
             "",
             verify_txt,
         ]

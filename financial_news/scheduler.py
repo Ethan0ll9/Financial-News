@@ -85,7 +85,7 @@ def _format_block(source: NewsSource, items: List[NewsItem], ts: str) -> str:
 
 
 def run_digest() -> None:
-    """擷取所有啟用來源並推播（單次）。"""
+    """擷取所有啟用來源，合併為一則訊息推播（節省 LINE 月配額）。"""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     reset_digest_rss_items()
     notifier = NotifyHub(settings)
@@ -95,28 +95,33 @@ def run_digest() -> None:
         return
 
     logger.info("開始擷取新聞 digest，來源數：%d", len(sources))
+    blocks: List[str] = []
     for src in sources:
         try:
             items = src.fetch_top(settings.top_n)
         except Exception as e:
             logger.exception("來源 %s 擷取失敗: %s", src.name, e)
-            err_msg = f"❌ 財經新聞 digest 錯誤\n\n時間：{ts}\n來源：{src.name}\n錯誤：{e}"
-            notifier.push_text_chunks(err_msg)
+            notifier.push_text_chunks(
+                f"❌ 財經新聞 digest 錯誤\n\n時間：{ts}\n來源：{src.name}\n錯誤：{e}"
+            )
             continue
 
-        # macro 用：保留**全部** RSS items（國際總體摘要仍需多區域素材）
+        # macro 用：保留全部 RSS items（國際總體摘要仍需多區域素材）
         if isinstance(src, RssFeedSource):
             set_digest_rss_items(items)
 
-        # LINE 推播：精簡為 High + 台媒，避免月配額（200 則）過早耗盡
+        # 精簡為 High + 台媒，避免月配額過早耗盡
         line_items = [it for it in items if _is_line_eligible(it)]
         if not line_items:
-            logger.info("來源 %s 精簡後無可推送項目，略過 LINE", src.name)
+            logger.info("來源 %s 精簡後無可推送項目", src.name)
             continue
-        body = _format_block(src, line_items, ts)
-        header = f"📰 財經新聞摘要\n{'=' * 24}\n\n"
-        if not notifier.push_text_chunks(header + body):
-            logger.error("來源 %s LINE 發送失敗", src.name)
+        blocks.append(_format_block(src, line_items, ts))
+
+    if blocks:
+        # 所有來源合併成一則訊息，push_text_chunks 在超長時自動分批
+        combined = f"📰 財經新聞摘要\n{'=' * 24}\n\n" + "\n\n".join(blocks)
+        if not notifier.push_text_chunks(combined):
+            logger.error("digest 合併訊息 LINE 發送失敗")
 
     logger.info("digest 完成")
 
