@@ -88,9 +88,11 @@ def build_market_digest(
             total_turnover=0,
         )
 
+    from financial_news.tw_briefing.market_breadth import _normalize_industry
+
     by_ind: Dict[str, List[ProxyStat]] = defaultdict(list)
     for s in stats:
-        by_ind[s.industry].append(s)
+        by_ind[_normalize_industry(s.industry)].append(s)
 
     themes_all: List[ThemeSummary] = []
     for ind, lst in by_ind.items():

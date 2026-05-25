@@ -6,7 +6,6 @@ from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 from config.settings import Settings
-from financial_news.image_uploader import ImageUploader
 from financial_news.notify_hub import NotifyHub
 from financial_news.tw_briefing.briefing_state import (
     BriefingEventRecord,
@@ -14,11 +13,22 @@ from financial_news.tw_briefing.briefing_state import (
     save_state,
     utc_now_iso,
 )
+from financial_news.image_uploader import ImageUploader
 from financial_news.tw_briefing.chart_builder import DashboardInput, render_dashboard_png
+from financial_news.tw_briefing.dashboard_v2 import (
+    OverviewData,
+    WatchlistData,
+    render_overview_png,
+    render_watchlist_png,
+)
 from financial_news.tw_briefing.digest_context import get_digest_rss_items
 from financial_news.tw_briefing.exdividend import events_on_date, fetch_twt48u_all
 from financial_news.tw_briefing.finmind_client import FinMindClient
-from financial_news.tw_briefing.flex_builder import build_briefing_bubble
+from financial_news.tw_briefing.market_breadth import (
+    MarketBreadthClient,
+    build_index_summary,
+    build_industry_flow,
+)
 from financial_news.tw_briefing.html_report import (
     HtmlReportData,
     text_block_to_html as _text_block_to_html,
@@ -326,13 +336,69 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
         ]
     )
 
-    # 上傳 PNG、取得公開 URL
+    # 舊版單張 PNG 仍產出供本機 HTML 報告對照，但不再上傳 imgbb：
+    # 新版 v2 拆兩張（overview / watchlist）並透過 imgbb 上傳，LINE/Telegram 都可推送。
     image_url: Optional[str] = None
-    if png_path:
-        uploader = ImageUploader(settings.imgbb_api_key)
-        image_url = uploader.upload(png_path)
 
-    # HTML dashboard
+    # ---- v2 dashboard（overview + watchlist）-------------------------------
+    overview_path = settings.tw_report_dir / f"morning-overview-{today.isoformat()}.png"
+    watchlist_path = settings.tw_report_dir / f"morning-watchlist-{today.isoformat()}.png"
+    overview_url: Optional[str] = None
+    watchlist_url: Optional[str] = None
+    try:
+        mb = MarketBreadthClient()
+        mi_index_rows = mb.fetch_mi_index()
+        twse_shares = mb.fetch_twse_company_info()
+        twse_quotes = mb.fetch_twse_quotes(shares_map=twse_shares)
+        tpex_quotes = mb.fetch_tpex_quotes()
+        # FinMind TPEx K 線：補 MI_INDEX 不含的「櫃買指數」收盤
+        tpex_bars = client.bars_on_or_before("TPEx", prev, n=2)
+        tpex_pair = (
+            (tpex_bars[-2].close, tpex_bars[-1].close)
+            if len(tpex_bars) >= 2
+            else None
+        )
+        indices = build_index_summary(
+            mi_index_rows=mi_index_rows,
+            twse_quotes=twse_quotes,
+            tpex_quotes=tpex_quotes,
+            meta_map=meta_map,
+            tpex_index_pair=tpex_pair,
+        )
+        inflow, outflow = build_industry_flow(
+            twse_quotes=twse_quotes,
+            tpex_quotes=tpex_quotes,
+            meta_map=meta_map,
+        )
+        render_overview_png(
+            OverviewData(
+                title=title,
+                subtitle=f"{prev.isoformat()}（上一交易日）｜全市場指數與產業資金流",
+                session_label=str(prev),
+                indices=indices,
+                inflow=inflow,
+                outflow=outflow,
+                footer=f"Generated at {generated_at}｜TWSE OpenAPI + FinMind",
+            ),
+            overview_path,
+        )
+        render_watchlist_png(
+            WatchlistData(
+                title="觀察清單熱力 + 強弱族群",
+                subtitle=f"{prev.isoformat()}｜{digest.total_members} 檔關注標的",
+                digest=digest,
+                proxy_stats=proxy_stats,
+                footer=f"Generated at {generated_at}",
+            ),
+            watchlist_path,
+        )
+        uploader = ImageUploader(settings.imgbb_api_key)
+        overview_url = uploader.upload(overview_path)
+        watchlist_url = uploader.upload(watchlist_path)
+    except Exception as e:
+        logger.exception("產生 v2 儀表板（overview/watchlist）失敗：%s", e)
+
+    # HTML dashboard（image_url=None 時 HTML 內嵌本機 PNG 路徑）
     try:
         write_html_report(
             HtmlReportData(
@@ -353,18 +419,14 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
     except Exception as e:
         logger.exception("產生 HTML 失敗：%s", e)
 
-    # 推送
+    # 推送：v2 拆兩張圖（overview + watchlist），LINE 與 Telegram 收到完全相同內容
     pushed = False
     if settings.tw_push_mode == "visual":
         pushed = _push_visual(
             notifier=notifier,
             title=title,
-            subtitle=subtitle,
-            idx_id=idx_id,
-            index_bar=index_bar,
-            prev_close_for_idx=prev_close_for_idx,
-            digest=digest,
-            image_url=image_url,
+            overview_url=overview_url,
+            watchlist_url=watchlist_url,
             today_events_txt=today_events_txt,
             lookahead_txt=lookahead_txt,
             in_progress_txt=in_progress_txt,
@@ -495,12 +557,8 @@ def _push_visual(
     *,
     notifier: NotifyHub,
     title: str,
-    subtitle: str,
-    idx_id: str,
-    index_bar,
-    prev_close_for_idx,
-    digest,
-    image_url: Optional[str],
+    overview_url: Optional[str],
+    watchlist_url: Optional[str],
     today_events_txt: str,
     lookahead_txt: str,
     in_progress_txt: str,
@@ -508,29 +566,30 @@ def _push_visual(
     html_path,
     force_banner: bool,
 ) -> bool:
-    messages: List[dict] = []
+    """v2：推 2 張公開 URL 圖（指數+雙產業熱力；觀察清單熱力+強弱清單）+ 文字 tail。
 
-    bubble = build_briefing_bubble(
-        title=("【測試】" + title) if force_banner else title,
-        subtitle=subtitle,
-        index_id=idx_id,
-        index_bar=index_bar,
-        index_prev_close=prev_close_for_idx,
-        digest=digest,
-        image_url=image_url,
-    )
-    messages.append({"type": "flex", "altText": title[:400], "contents": bubble})
+    LINE 與 Telegram 收到完全相同內容，不再使用 Flex 卡片。
+    若兩張圖都沒上傳成功（imgbb 失效或未設定），回傳 False，由呼叫端走文字 fallback。
+    """
+    if not overview_url and not watchlist_url:
+        logger.warning("v2 dashboard 兩張圖均無法上傳（imgbb 未設定或失敗），改走文字 fallback")
+        return False
 
-    # 移除重複的獨立 image 訊息：Flex bubble 的 hero 已含同一張儀表板圖，
-    # 額外推一則 image 會佔用 LINE 月配額且畫面重複（user reported 2026-05）。
-
-    # 送 flex（單則訊息即可）
-    ok = notifier.push_messages(messages)
+    ok = True
+    if force_banner:
+        if not notifier.push_text_chunks(
+            f"{title}\n【測試】本日非 FinMind 交易日；大盤／族群以上一交易日收盤為準。"
+        ):
+            ok = False
+    if overview_url:
+        if not notifier.push_image(overview_url):
+            ok = False
+    if watchlist_url:
+        if not notifier.push_image(watchlist_url):
+            ok = False
 
     # tail 文字（事件、預告、進行中、海外摘要）以 push_text_chunks 分批送，避免截斷
     tail_lines: List[str] = []
-    if force_banner:
-        tail_lines.append("【測試】本日非 FinMind 交易日；大盤／族群以上一交易日收盤為準。")
     tail_lines.append(today_events_txt)
     if lookahead_txt:
         tail_lines.append(lookahead_txt)

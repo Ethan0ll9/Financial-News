@@ -8,7 +8,6 @@ from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from config.settings import Settings
-from financial_news.image_uploader import ImageUploader
 from financial_news.notify_hub import NotifyHub
 from financial_news.tw_briefing.briefing_state import (
     BriefingEventRecord,
@@ -16,14 +15,25 @@ from financial_news.tw_briefing.briefing_state import (
     load_state,
     utc_now_iso,
 )
+from financial_news.image_uploader import ImageUploader
 from financial_news.tw_briefing.chart_builder import DashboardInput, render_dashboard_png
+from financial_news.tw_briefing.dashboard_v2 import (
+    OverviewData,
+    WatchlistData,
+    render_overview_png,
+    render_watchlist_png,
+)
 from financial_news.tw_briefing.event_window import (
     collect_lookahead,
     format_next_day_brief,
 )
 from financial_news.tw_briefing.exdividend import fetch_twt48u_all
 from financial_news.tw_briefing.finmind_client import FinMindClient, IndexBar
-from financial_news.tw_briefing.flex_builder import build_briefing_bubble
+from financial_news.tw_briefing.market_breadth import (
+    MarketBreadthClient,
+    build_index_summary,
+    build_industry_flow,
+)
 from financial_news.tw_briefing.html_report import (
     HtmlReportData,
     text_block_to_html as _text_block_to_html,
@@ -321,10 +331,66 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
         ]
     )
 
+    # 舊版單張 PNG 仍產出供本機 HTML 對照，但不再上傳；
+    # 新版 v2 拆兩張（overview / watchlist），LINE/Telegram 同時送 image。
     image_url: Optional[str] = None
-    if png_path:
+
+    overview_path = settings.tw_report_dir / f"postmarket-overview-{today.isoformat()}.png"
+    watchlist_path = settings.tw_report_dir / f"postmarket-watchlist-{today.isoformat()}.png"
+    overview_url: Optional[str] = None
+    watchlist_url: Optional[str] = None
+    try:
+        mb = MarketBreadthClient()
+        mi_index_rows = mb.fetch_mi_index()
+        twse_shares = mb.fetch_twse_company_info()
+        twse_quotes = mb.fetch_twse_quotes(shares_map=twse_shares)
+        tpex_quotes = mb.fetch_tpex_quotes()
+        # FinMind TPEx K 線：補 MI_INDEX 不含的「櫃買指數」收盤
+        tpex_bars = client.bars_on_or_before("TPEx", today, n=2)
+        tpex_pair = (
+            (tpex_bars[-2].close, tpex_bars[-1].close)
+            if len(tpex_bars) >= 2
+            else None
+        )
+        indices = build_index_summary(
+            mi_index_rows=mi_index_rows,
+            twse_quotes=twse_quotes,
+            tpex_quotes=tpex_quotes,
+            meta_map=meta_map,
+            tpex_index_pair=tpex_pair,
+        )
+        inflow, outflow = build_industry_flow(
+            twse_quotes=twse_quotes,
+            tpex_quotes=tpex_quotes,
+            meta_map=meta_map,
+        )
+        render_overview_png(
+            OverviewData(
+                title=title,
+                subtitle=f"{today.isoformat()}｜全市場指數與產業資金流",
+                session_label=today.isoformat(),
+                indices=indices,
+                inflow=inflow,
+                outflow=outflow,
+                footer=f"Generated at {generated_at}｜TWSE OpenAPI + FinMind",
+            ),
+            overview_path,
+        )
+        render_watchlist_png(
+            WatchlistData(
+                title="觀察清單熱力 + 強弱族群（盤後）",
+                subtitle=f"{today.isoformat()}｜{digest.total_members} 檔關注標的",
+                digest=digest,
+                proxy_stats=proxy_stats,
+                footer=f"Generated at {generated_at}",
+            ),
+            watchlist_path,
+        )
         uploader = ImageUploader(settings.imgbb_api_key)
-        image_url = uploader.upload(png_path)
+        overview_url = uploader.upload(overview_path)
+        watchlist_url = uploader.upload(watchlist_path)
+    except Exception as e:
+        logger.exception("產生 v2 儀表板（overview/watchlist）失敗：%s", e)
 
     try:
         write_html_report(
@@ -351,12 +417,8 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
         pushed = _push_visual(
             notifier=notifier,
             title=title,
-            subtitle=subtitle,
-            idx_id=idx_id,
-            index_bar=index_bar,
-            prev_close=prev_close,
-            digest=digest,
-            image_url=image_url,
+            overview_url=overview_url,
+            watchlist_url=watchlist_url,
             verify_txt=verify_txt,
             next_day_txt=next_day_txt,
             html_path=html_path,
@@ -383,40 +445,36 @@ def _push_visual(
     *,
     notifier: NotifyHub,
     title: str,
-    subtitle: str,
-    idx_id: str,
-    index_bar,
-    prev_close,
-    digest,
-    image_url: Optional[str],
+    overview_url: Optional[str],
+    watchlist_url: Optional[str],
     verify_txt: str,
     next_day_txt: str,
     html_path,
     force_banner: bool,
 ) -> bool:
-    messages: List[dict] = []
+    """v2：推 2 張公開 URL 圖（overview + watchlist）+ 文字 tail。
 
-    bubble = build_briefing_bubble(
-        title=("【測試】" + title) if force_banner else title,
-        subtitle=subtitle,
-        index_id=idx_id,
-        index_bar=index_bar,
-        index_prev_close=prev_close,
-        digest=digest,
-        image_url=image_url,
-    )
-    messages.append({"type": "flex", "altText": title[:400], "contents": bubble})
+    LINE 與 Telegram 收到完全相同內容；若兩張圖都沒上傳成功則回 False，由呼叫端走文字 fallback。
+    """
+    if not overview_url and not watchlist_url:
+        logger.warning("v2 dashboard 兩張圖均無法上傳，改走文字 fallback")
+        return False
 
-    # 移除重複的獨立 image 訊息：Flex bubble 的 hero 已含同一張儀表板圖，
-    # 額外推一則 image 會佔用 LINE 月配額且畫面重複（user reported 2026-05）。
-
-    # 送 flex（單則訊息即可）
-    ok = notifier.push_messages(messages)
+    ok = True
+    if force_banner:
+        if not notifier.push_text_chunks(
+            f"{title}\n【測試】本日非交易日；若無當日 K 線為正常。"
+        ):
+            ok = False
+    if overview_url:
+        if not notifier.push_image(overview_url):
+            ok = False
+    if watchlist_url:
+        if not notifier.push_image(watchlist_url):
+            ok = False
 
     # tail 文字以 push_text_chunks 分批送，避免截斷
     tail_lines: List[str] = []
-    if force_banner:
-        tail_lines.append("【測試】本日非交易日；若無當日 K 線為正常。")
     tail_lines.append(verify_txt)
     if next_day_txt:
         tail_lines.append(next_day_txt)
