@@ -382,12 +382,16 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
 
     # 今日／本週／國際 RSS 摘要放 extra_sections（HTML 版可見）
     sus_parsed = [x for x in (parse_suspended_row(r) for r in sus_raw) if x]
+    # 今日重點只顯示「今天新公告」的處置股（announce_date == today）。
+    # 進行中（處置期間涵蓋今日）的改由 collect_in_progress 的「進行中事件」區塊顯示，
+    # 避免同一檔股票在「今日重點」和「進行中事件」兩個段落各出現一次。
+    today_disposal_new = [d for d in today_disposal if d.announce_date == today]
     today_events_txt = _format_today_events(
         today,
         tw48_rows,
         sus_parsed,
         attention=today_attention,
-        disposal=today_disposal,
+        disposal=today_disposal_new,
         sh_meetings=today_meetings,
         short_cover=today_short_cover,
         watch_set=watch_set,
