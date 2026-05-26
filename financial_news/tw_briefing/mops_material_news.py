@@ -122,34 +122,54 @@ def _row_tpex_to_news(row: dict) -> Optional[MaterialNews]:
 
 
 def fetch_material_news(*, http: Optional[HttpClient] = None) -> List[MaterialNews]:
-    """抓 TWSE + TPEX 重大訊息，合併並依公告時間排序（新 → 舊）。
+    """抓 TWSE + TPEX 重大訊息，合併、去重並依公告時間排序（新 → 舊）。
 
     任一端點失敗都記 warning 並回該端點空清單，不影響另一邊。
+
+    去重規則：以 ``(stock_id, normalized_subject, announce_dt)`` 為 key；
+    上游偶有同主旨同時刻重複登錄的情況（含上市/上櫃資料源交叉），
+    若不去重會在「重大訊息」段出現一模一樣的兩行，被切到不同則訊息時更明顯。
+    主旨會做 trim + 連續空白壓平再比對，避免空白差異被當成不同。
     """
     client = http or HttpClient(timeout=30.0, name="mops_news")
-    out: List[MaterialNews] = []
+    raw: List[MaterialNews] = []
 
     try:
-        rows = client.get_json(TWSE_MATERIAL_NEWS_URL)
+        rows = client.get_json(TWSE_MATERIAL_NEWS_URL, tries=2)
         for r in rows or []:
             n = _row_twse_to_news(r)
             if n:
-                out.append(n)
-        logger.info("MOPS TWSE 重大訊息：%d 筆", len([x for x in out if x.market == "TWSE"]))
+                raw.append(n)
+        logger.info("MOPS TWSE 重大訊息：%d 筆", len([x for x in raw if x.market == "TWSE"]))
     except Exception as e:  # noqa: BLE001
         logger.warning("MOPS TWSE 重大訊息抓取失敗：%s", e)
 
     try:
-        rows = client.get_json(TPEX_MATERIAL_NEWS_URL)
+        rows = client.get_json(TPEX_MATERIAL_NEWS_URL, tries=2)
         tpex_count = 0
         for r in rows or []:
             n = _row_tpex_to_news(r)
             if n:
-                out.append(n)
+                raw.append(n)
                 tpex_count += 1
         logger.info("MOPS TPEX 重大訊息：%d 筆", tpex_count)
     except Exception as e:  # noqa: BLE001
         logger.warning("MOPS TPEX 重大訊息抓取失敗：%s", e)
+
+    # 去重：(sid, normalized_subject, announce_dt)
+    seen: set = set()
+    out: List[MaterialNews] = []
+    dup_count = 0
+    for n in raw:
+        subj_norm = " ".join((n.subject or "").split())
+        key = (n.stock_id, subj_norm, n.announce_dt)
+        if key in seen:
+            dup_count += 1
+            continue
+        seen.add(key)
+        out.append(n)
+    if dup_count:
+        logger.info("MOPS 去重移除 %d 筆同主旨同時刻重複", dup_count)
 
     out.sort(key=lambda x: x.sort_key, reverse=True)
     return out

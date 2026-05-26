@@ -14,11 +14,13 @@
 """
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import requests
 from requests.adapters import HTTPAdapter
+from requests.exceptions import ChunkedEncodingError, ConnectionError as ReqConnError
 
 try:
     # urllib3 >= 1.26
@@ -87,16 +89,46 @@ class HttpClient:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         timeout: Optional[float] = None,
+        tries: int = 1,
+        retry_backoff: float = 1.5,
     ) -> Any:
-        """GET → ``raise_for_status`` → ``.json()``；失敗會把例外往外拋。"""
-        resp = self._session.get(
-            url,
-            params=params,
-            headers=headers,
-            timeout=self._to(timeout),
-        )
-        resp.raise_for_status()
-        return resp.json()
+        """GET → ``raise_for_status`` → ``.json()``；失敗會把例外往外拋。
+
+        當 ``tries > 1`` 時，遇到下列暫時性錯誤會在 ``retry_backoff`` 秒後重試：
+          - ``json.JSONDecodeError``（含 ``requests.JSONDecodeError``）：上游回傳截斷的 JSON
+          - ``ChunkedEncodingError`` / ``ConnectionError`` / ``Timeout``：傳輸層中斷
+
+        TWSE / TPEX OpenAPI 大檔（~3MB）偶爾會被代理切斷，1–2 次重試後通常會回完整內容。
+        """
+        attempts = max(1, tries)
+        last_exc: Optional[BaseException] = None
+        for i in range(attempts):
+            try:
+                resp = self._session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=self._to(timeout),
+                )
+                resp.raise_for_status()
+                return resp.json()
+            except (
+                requests.exceptions.JSONDecodeError,
+                ChunkedEncodingError,
+                ReqConnError,
+                requests.exceptions.Timeout,
+            ) as e:
+                last_exc = e
+                if i + 1 < attempts:
+                    logger.warning(
+                        "[%s] get_json transient error (try %d/%d) %s: %s",
+                        self.name, i + 1, attempts, type(e).__name__, str(e)[:200],
+                    )
+                    _time.sleep(retry_backoff * (i + 1))
+                    continue
+                raise
+        assert last_exc is not None
+        raise last_exc  # pragma: no cover
 
     def get_bytes(
         self,

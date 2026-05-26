@@ -131,7 +131,11 @@ class MarketBreadthClient:
         資料源：``opendata/t187ap03_L``，欄位「已發行普通股股數加TDR發行股數」。
         若該欄缺失則 fallback 用「實收資本額」÷ 面額 10 元估算。
         """
-        rows = self._http.get_json(TWSE_COMPANY_INFO_URL, params=None)
+        try:
+            rows = self._http.get_json(TWSE_COMPANY_INFO_URL, params=None, tries=3)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("TWSE company info 取得失敗（已重試 3 次）：%s — 回空對照", e)
+            return {}
         out: Dict[str, int] = {}
         if not isinstance(rows, list):
             return out
@@ -156,7 +160,11 @@ class MarketBreadthClient:
         shares_map: Optional[Dict[str, int]] = None,
     ) -> List[StockQuote]:
         """TWSE STOCK_DAY_ALL → 上市個股 list。可選傳入 shares_map 以填入 ``shares_outstanding``。"""
-        rows = self._http.get_json(TWSE_STOCK_DAY_ALL_URL, params=None)
+        try:
+            rows = self._http.get_json(TWSE_STOCK_DAY_ALL_URL, params=None, tries=3)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("TWSE STOCK_DAY_ALL 取得失敗（已重試 3 次）：%s — 回空清單", e)
+            return []
         out: List[StockQuote] = []
         if not isinstance(rows, list):
             return out
@@ -192,8 +200,19 @@ class MarketBreadthClient:
 
         ``Capitals`` 欄即實收資本額；面額 10 元，已發行股數 = Capitals / 10 → 推算市值。
         ``Change`` 欄需 robust parse（可能含「除息」「除權」等文字）。
+
+        該 endpoint 回傳 ~3MB JSON，TPEX 偶爾會截斷（``Unterminated string``）。
+        加上 3 次重試 + 退避；若最終仍失敗則回空清單並 log warning，
+        避免單一 endpoint 異常導致整個 v2 dashboard 無法產出。
         """
-        rows = self._http.get_json(TPEX_DAILY_CLOSE_QUOTES_URL, params=None)
+        try:
+            rows = self._http.get_json(TPEX_DAILY_CLOSE_QUOTES_URL, params=None, tries=3)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "TPEX daily_close_quotes 取得失敗（已重試 3 次）：%s — 回空清單",
+                e,
+            )
+            return []
         out: List[StockQuote] = []
         if not isinstance(rows, list):
             return out
