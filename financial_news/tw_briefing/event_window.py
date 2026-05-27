@@ -277,19 +277,32 @@ def collect_in_progress(
     watch_set: Optional[set] = set(watch_tickers) if watch_tickers is not None else None
     out: List[InProgressItem] = []
     if include_disposal and disposals:
+        # 同一檔可能有多輪連續處置（前一輪處置期未結束、又公告下一輪），
+        # 兩輪期間都涵蓋 today 會讓同檔出現兩次；以 stock_id 去重，保留
+        # period_end 最遲（最新一輪）的那筆；相同則保留 announce_date 較晚者。
+        latest_by_sid: Dict[str, Tuple[DisposalStock, date, date]] = {}
         for d in disposals:
             ps, pe = _disposal_period(d)
-            if ps and pe and ps <= today <= pe:
-                out.append(
-                    InProgressItem(
-                        kind="disposal",
-                        stock_id=d.stock_id,
-                        stock_name=d.stock_name,
-                        period_start=ps,
-                        period_end=pe,
-                        detail=f"{d.measure}｜{d.reason}",
-                    )
+            if not (ps and pe and ps <= today <= pe):
+                continue
+            existing = latest_by_sid.get(d.stock_id)
+            if existing is None:
+                latest_by_sid[d.stock_id] = (d, ps, pe)
+                continue
+            _, _, ex_pe = existing
+            if pe > ex_pe or (pe == ex_pe and d.announce_date > existing[0].announce_date):
+                latest_by_sid[d.stock_id] = (d, ps, pe)
+        for d, ps, pe in latest_by_sid.values():
+            out.append(
+                InProgressItem(
+                    kind="disposal",
+                    stock_id=d.stock_id,
+                    stock_name=d.stock_name,
+                    period_start=ps,
+                    period_end=pe,
+                    detail=f"{d.measure}｜{d.reason}",
                 )
+            )
     if include_book_close and sh_meetings:
         for m in sh_meetings:
             if watch_set is not None and m.stock_id not in watch_set:

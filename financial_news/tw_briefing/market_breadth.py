@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import date
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from financial_news.core.api_endpoints import (
@@ -249,6 +250,24 @@ class MarketBreadthClient:
         rows = self._http.get_json(TWSE_MI_INDEX_URL, params=None)
         return rows if isinstance(rows, list) else []
 
+    def probe_data_date(self) -> Optional[date]:
+        """探查 TWSE OpenAPI 當前公布的資料日期（民國年）。
+
+        MI_INDEX 每筆 row 都含「日期」欄（民國日期，格式 ``1150526``），
+        盤後 14:30 時通常仍指向昨日（更新時點約 17:00～17:30 之後）。
+        用來判斷 TWSE 大盤資料是否已切到當日，避免拿到上一交易日的數字
+        卻誤標成今日。
+        """
+        try:
+            rows = self._http.get_json(TWSE_MI_INDEX_URL, params=None, tries=2)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("MI_INDEX probe 取得失敗：%s", e)
+            return None
+        if not isinstance(rows, list) or not rows:
+            return None
+        raw = str(rows[0].get("日期") or "").strip()
+        return _parse_roc_date(raw)
+
 
 # ---- 聚合 -------------------------------------------------------------------
 
@@ -420,6 +439,25 @@ def build_industry_flow(
 # ---- 解析輔助 ---------------------------------------------------------------
 
 _COMMON_STOCK_RE = re.compile(r"^[1-9]\d{3}$")
+_ROC_DATE_RE = re.compile(r"^(\d{3,4})(\d{2})(\d{2})$")
+
+
+def _parse_roc_date(raw: str) -> Optional[date]:
+    """``1150526`` → ``date(2026, 5, 26)``。
+
+    民國 N 年 → 西元 N + 1911；不合法字串回 ``None``。
+    """
+    if not raw:
+        return None
+    s = raw.strip().replace("/", "").replace("-", "")
+    m = _ROC_DATE_RE.match(s)
+    if not m:
+        return None
+    try:
+        roc_y, mm, dd = (int(x) for x in m.groups())
+        return date(roc_y + 1911, mm, dd)
+    except ValueError:
+        return None
 
 
 def _is_common_stock_id(sid: str) -> bool:

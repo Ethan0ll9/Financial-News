@@ -16,7 +16,6 @@ from financial_news.tw_briefing.briefing_state import (
     utc_now_iso,
 )
 from financial_news.image_uploader import ImageUploader
-from financial_news.tw_briefing.chart_builder import DashboardInput, render_dashboard_png
 from financial_news.tw_briefing.dashboard_v2 import (
     OverviewData,
     WatchlistData,
@@ -325,28 +324,9 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
     title = f"🌇 台股盤中走勢總結（{today.isoformat()}）"
     subtitle = "盤後｜大盤、熱門族群、熱門個股、事件驗證"
     generated_at = utc_now_iso()
-    png_path = settings.tw_report_dir / f"postmarket-{today.isoformat()}.png"
     html_path = settings.tw_report_dir / f"postmarket-{today.isoformat()}.html"
 
     index_bar = idx_bars[-1] if idx_bars else None
-
-    try:
-        render_dashboard_png(
-            DashboardInput(
-                title=title,
-                subtitle=subtitle,
-                session_label=today.isoformat(),
-                index_id=idx_id,
-                index_bar=index_bar,
-                index_prev_close=prev_close,
-                digest=digest,
-                footer=f"Generated at {generated_at}",
-            ),
-            png_path,
-        )
-    except Exception as e:
-        logger.exception("產生 PNG 儀表板失敗：%s", e)
-        png_path = None
 
     extra_sections = [
         {"title": "事件驗證", "body_html": _text_block_to_html(verify_txt)},
@@ -363,16 +343,28 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
         ]
     )
 
-    # 舊版單張 PNG 仍產出供本機 HTML 對照，但不再上傳；
-    # 新版 v2 拆兩張（overview / watchlist），LINE/Telegram 同時送 image。
     image_url: Optional[str] = None
 
     overview_path = settings.tw_report_dir / f"postmarket-overview-{today.isoformat()}.png"
     watchlist_path = settings.tw_report_dir / f"postmarket-watchlist-{today.isoformat()}.png"
     overview_url: Optional[str] = None
     watchlist_url: Optional[str] = None
+    # TWSE OpenAPI 當日資料：要等 17:00～17:30 後才會切換；若還是上一交易日就
+    # 阻塞重試，最多等到 deadline（預設 18:00）。拿不到當日就跳過 v2 圖且發提示，
+    # 避免送出穿著今日衣服的昨日資料。
+    twse_data_stale = False
+    mb = MarketBreadthClient()
+    if not (force and is_non_trading):
+        if not _wait_for_twse_data(
+            mb=mb,
+            today=today,
+            deadline_hour=settings.tw_postmarket_twse_deadline_hour,
+            retry_interval_min=settings.tw_postmarket_twse_retry_interval_min,
+        ):
+            twse_data_stale = True
     try:
-        mb = MarketBreadthClient()
+        if twse_data_stale:
+            raise RuntimeError("TWSE OpenAPI 當日資料超過 deadline 仍未更新")
         mi_index_rows = mb.fetch_mi_index()
         twse_shares = mb.fetch_twse_company_info()
         twse_quotes = mb.fetch_twse_quotes(shares_map=twse_shares)
@@ -449,6 +441,16 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
     except Exception as e:
         logger.exception("產生 HTML 失敗：%s", e)
 
+    stale_notice = ""
+    if twse_data_stale:
+        stale_notice = (
+            f"⏳ 台股盤後｜TWSE OpenAPI 當日資料尚未公布\n\n"
+            f"{today.isoformat()} 的指數／個股 OpenAPI（更新時點約 17:00～17:30）"
+            f"截止 {settings.tw_postmarket_twse_deadline_hour:02d}:00 仍指向上一交易日，"
+            f"本次盤後大盤／產業熱力圖略過。\n"
+            f"事件列管、明日預告、重大訊息、保證金調整仍會推送。"
+        )
+
     pushed = False
     if settings.tw_push_mode == "visual":
         pushed = _push_visual(
@@ -456,10 +458,10 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
             title=title,
             overview_url=overview_url,
             watchlist_url=watchlist_url,
-            verify_txt=verify_txt,
             material_news_txt=material_news_txt,
             margin_txt=margin_txt,
             next_day_txt=next_day_txt,
+            stale_notice=stale_notice,
             html_path=html_path,
             force_banner=(force and is_non_trading),
         )
@@ -471,7 +473,6 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
             generated_at=generated_at,
             idx_id=idx_id,
             idx_txt=idx_txt,
-            verify_txt=verify_txt,
             next_day_txt=next_day_txt,
         )
         if not notifier.push_text_chunks(body):
@@ -484,25 +485,26 @@ def _push_visual(
     title: str,
     overview_url: Optional[str],
     watchlist_url: Optional[str],
-    verify_txt: str,
     material_news_txt: str,
     margin_txt: str,
     next_day_txt: str,
+    stale_notice: str,
     html_path,
     force_banner: bool,
 ) -> bool:
     """v2：推 2 張公開 URL 圖（overview + watchlist）+ 文字 tail。
 
-    LINE 與 Telegram 收到完全相同內容；若兩張圖都沒上傳成功則回 False，由呼叫端走文字 fallback。
+    LINE 與 Telegram 收到完全相同內容；若兩張圖都沒上傳成功且沒有 stale_notice
+    可送，回 False 由呼叫端走文字 fallback。
 
     文字 tail 送多則訊息以確保「重大訊息」與「期貨保證金調整」不會被單則上限截斷：
-      1. 圖①（overview） 2. 圖②（watchlist）
+      1. 圖①（overview） 2. 圖②（watchlist）— 若 TWSE 資料未更新則改推 stale_notice
       3. 重大訊息（watchlist 個股優先）
       4. 個股期貨保證金調整
-      5. 事件列管 + 明日預告（合併送）
+      5. 明日預告（合併送；事件列管已由盤前「今日重點」覆蓋，盤後不再重送）
     """
-    if not overview_url and not watchlist_url:
-        logger.warning("v2 dashboard 兩張圖均無法上傳，改走文字 fallback")
+    if not overview_url and not watchlist_url and not stale_notice:
+        logger.warning("v2 dashboard 兩張圖均無法上傳且無 stale_notice，改走文字 fallback")
         return False
 
     ok = True
@@ -510,6 +512,9 @@ def _push_visual(
         if not notifier.push_text_chunks(
             f"{title}\n【測試】本日非交易日；若無當日 K 線為正常。"
         ):
+            ok = False
+    if stale_notice:
+        if not notifier.push_text_chunks(stale_notice):
             ok = False
     if overview_url:
         if not notifier.push_image(overview_url):
@@ -528,10 +533,8 @@ def _push_visual(
         if not notifier.push_text_chunks(margin_txt):
             ok = False
 
-    # 最後事件列管 + 明日預告 + 報告連結（合併一則，較不重要）
+    # 最後明日預告 + 報告連結（事件列管已由盤前「今日重點」覆蓋，盤後不重送）
     tail_lines: List[str] = []
-    if verify_txt:
-        tail_lines.append(verify_txt)
     if next_day_txt:
         tail_lines.append(next_day_txt)
     tail_lines.append(f"📎 本機儀表板：{html_path}")
@@ -541,6 +544,55 @@ def _push_visual(
             ok = False
 
     return ok
+
+
+def _wait_for_twse_data(
+    *,
+    mb: MarketBreadthClient,
+    today: date,
+    deadline_hour: int,
+    retry_interval_min: int,
+) -> bool:
+    """阻塞等待 TWSE OpenAPI 切到當日資料；最晚等到當日 ``deadline_hour:00``。
+
+    14:30 跑盤後時 TWSE MI_INDEX / STOCK_DAY_ALL 仍是上一交易日，
+    用 :meth:`MarketBreadthClient.probe_data_date` 探查日期，每 ``retry_interval_min``
+    分鐘 retry 一次，直到資料切到當日（回 True）或超過 deadline（回 False）。
+    """
+    deadline = datetime.combine(
+        today, datetime.min.time(), tzinfo=_TZ_TW
+    ).replace(hour=max(0, min(23, deadline_hour)))
+    interval = max(1, retry_interval_min) * 60
+
+    attempt = 0
+    while True:
+        attempt += 1
+        data_date = mb.probe_data_date()
+        if data_date == today:
+            if attempt > 1:
+                logger.info("TWSE 當日資料已就緒（第 %d 次探查）", attempt)
+            return True
+        now = datetime.now(_TZ_TW)
+        if now >= deadline:
+            logger.warning(
+                "TWSE 等待逾時：data_date=%s, today=%s, deadline=%s",
+                data_date,
+                today,
+                deadline.isoformat(),
+            )
+            return False
+        remaining_sec = max(0, int((deadline - now).total_seconds()))
+        sleep_sec = min(interval, remaining_sec)
+        if sleep_sec <= 0:
+            return False
+        logger.info(
+            "TWSE 當日資料尚未公布（探到 %s），第 %d 次 retry 將於 %d 秒後執行（deadline %s）",
+            data_date,
+            attempt,
+            sleep_sec,
+            deadline.strftime("%H:%M"),
+        )
+        time.sleep(sleep_sec)
 
 
 def _fetch_index_with_retry(
@@ -588,7 +640,6 @@ def _build_text_fallback(
     generated_at: str,
     idx_id: str,
     idx_txt: str,
-    verify_txt: str,
     next_day_txt: str = "",
 ) -> str:
     parts: List[str] = []
@@ -602,8 +653,6 @@ def _build_text_fallback(
             "",
             f"【大盤】加權（{idx_id}）",
             idx_txt,
-            "",
-            verify_txt,
         ]
     )
     if next_day_txt:

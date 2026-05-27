@@ -288,6 +288,22 @@ class Settings:
         if self.tw_postmarket_retry_interval_min > 60:
             self.tw_postmarket_retry_interval_min = 60
 
+        # TWSE OpenAPI 當日資料就緒等待（MI_INDEX / STOCK_DAY_ALL 約 17:00～17:30
+        # 才從上一交易日切到當日）。盤後若 14:30 就跑、要避免拿到「穿著今日衣服
+        # 的昨日資料」，會 probe MI_INDEX 日期、每 N 分鐘重試到 deadline_hour。
+        self.tw_postmarket_twse_deadline_hour = int(
+            os.getenv("TW_POSTMARKET_TWSE_DEADLINE_HOUR", "18")
+        )
+        if not 0 <= self.tw_postmarket_twse_deadline_hour <= 23:
+            self.tw_postmarket_twse_deadline_hour = 18
+        self.tw_postmarket_twse_retry_interval_min = int(
+            os.getenv("TW_POSTMARKET_TWSE_RETRY_INTERVAL_MIN", "30")
+        )
+        if self.tw_postmarket_twse_retry_interval_min < 5:
+            self.tw_postmarket_twse_retry_interval_min = 5
+        if self.tw_postmarket_twse_retry_interval_min > 120:
+            self.tw_postmarket_twse_retry_interval_min = 120
+
         self._validate()
 
     def _validate(self) -> None:

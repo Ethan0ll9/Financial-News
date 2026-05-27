@@ -14,7 +14,6 @@ from financial_news.tw_briefing.briefing_state import (
     utc_now_iso,
 )
 from financial_news.image_uploader import ImageUploader
-from financial_news.tw_briefing.chart_builder import DashboardInput, render_dashboard_png
 from financial_news.tw_briefing.dashboard_v2 import (
     OverviewData,
     WatchlistData,
@@ -355,30 +354,10 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
 
     index_bar = idx_bars[-1] if idx_bars else None
 
-    # PNG dashboard
     title = f"🌅 台股盤前重點（{today.isoformat()}）"
     subtitle = "盤前｜大盤、熱門族群、熱門個股"
     generated_at = utc_now_iso()
-    png_path = settings.tw_report_dir / f"morning-{today.isoformat()}.png"
     html_path = settings.tw_report_dir / f"morning-{today.isoformat()}.html"
-
-    try:
-        render_dashboard_png(
-            DashboardInput(
-                title=title,
-                subtitle=subtitle,
-                session_label=str(prev),
-                index_id=idx_id,
-                index_bar=index_bar,
-                index_prev_close=prev_close_for_idx,
-                digest=digest,
-                footer=f"Generated at {generated_at}",
-            ),
-            png_path,
-        )
-    except Exception as e:
-        logger.exception("產生 PNG 儀表板失敗：%s", e)
-        png_path = None
 
     # 今日／本週／國際 RSS 摘要放 extra_sections（HTML 版可見）
     sus_parsed = [x for x in (parse_suspended_row(r) for r in sus_raw) if x]
@@ -444,8 +423,6 @@ def run_premarket(settings: Settings, *, force: bool = False) -> None:
         ]
     )
 
-    # 舊版單張 PNG 仍產出供本機 HTML 報告對照，但不再上傳 imgbb：
-    # 新版 v2 拆兩張（overview / watchlist）並透過 imgbb 上傳，LINE/Telegram 都可推送。
     image_url: Optional[str] = None
 
     # ---- v2 dashboard（overview + watchlist）-------------------------------
