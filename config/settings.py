@@ -55,6 +55,11 @@ class Settings:
     def __init__(self) -> None:
         self.line_channel_access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
         self.line_user_id = os.getenv("LINE_USER_ID", "").strip()
+        self.line_group_id = os.getenv("LINE_GROUP_ID", "").strip()
+        # LINE_BROADCAST=false → 改用 Push（需填 GROUP_ID 或 USER_ID）；預設 true 走廣播
+        self.line_broadcast = _bool_env("LINE_BROADCAST", True)
+        # 最終接收者：broadcast 模式下為空字串；否則 GROUP_ID > USER_ID
+        self.line_recipient_id = "" if self.line_broadcast else (self.line_group_id or self.line_user_id)
 
         # Telegram Bot API（選用；與 LINE 並行推播）
         self.telegram_enabled = _bool_env("TELEGRAM_ENABLED", False)

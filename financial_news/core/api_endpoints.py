@@ -35,6 +35,7 @@ TAIFEX_STOCK_MARGINING_URL = "https://www.taifex.com.tw/cht/5/stockMargining"
 
 # ---- LINE -------------------------------------------------------------------
 LINE_PUSH_MESSAGE_URL = "https://api.line.me/v2/bot/message/push"
+LINE_BROADCAST_URL = "https://api.line.me/v2/bot/message/broadcast"
 
 # ---- imgbb ------------------------------------------------------------------
 IMGBB_UPLOAD_URL = "https://api.imgbb.com/1/upload"

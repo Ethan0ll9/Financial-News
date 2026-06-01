@@ -2,6 +2,10 @@
 
 對外介面與 ``LineNotifier`` 相同，呼叫端只需 ``NotifyHub(settings)``，
 不必在每處重複判斷 Telegram 是否啟用。
+
+LINE 推播策略：
+  - LINE_GROUP_ID 或 LINE_USER_ID 有設定 → Push 給指定對象
+  - 兩者皆空 → Broadcast 給所有加好友的使用者（預設）
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ class NotifyHub:
     def __init__(self, settings: Settings) -> None:
         self._line = LineNotifier(
             settings.line_channel_access_token,
-            settings.line_user_id,
+            settings.line_recipient_id,  # 空字串 → 自動走 broadcast
         )
         self._telegram: Optional[TelegramNotifier] = None
         if settings.telegram_enabled:
