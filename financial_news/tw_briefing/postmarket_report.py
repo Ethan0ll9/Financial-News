@@ -187,18 +187,17 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
         retry_interval_min=settings.tw_postmarket_retry_interval_min,
     )
 
+    # FinMind K 線未就緒：記錄提示訊息，但不中止；重大訊息／保證金／明日預告仍繼續推送
+    finmind_stale_notice = ""
     if strict_today and not idx_bars:
-        msg = (
-            f"⏳ 台股盤後總結\n\n"
-            f"{today.isoformat()} 加權指數當日 K 線尚未由 FinMind 公布"
-            f"（官方更新時間 17:30）。\n"
-            f"已重試 {settings.tw_postmarket_max_retries} 次（每次間隔 "
-            f"{settings.tw_postmarket_retry_interval_min} 分鐘）仍無資料，本次略過。\n"
-            f"如需更晚的排程時間，請調整 .env：TW_POSTMARKET_HOUR / TW_POSTMARKET_MINUTE。"
+        finmind_stale_notice = (
+            f"⏳ 台股盤後｜FinMind 加權指數 K 線尚未公布\n\n"
+            f"{today.isoformat()} 當日 K 線已重試 {settings.tw_postmarket_max_retries} 次"
+            f"（每次間隔 {settings.tw_postmarket_retry_interval_min} 分鐘）仍無資料，"
+            f"大盤走勢圖略過。\n"
+            f"重大訊息、保證金調整、明日預告仍會推送。"
         )
-        notifier.push_text_chunks(msg)
-        logger.warning("盤後：今日 idx_bars 重試後仍未取得，已通知並結束")
-        return
+        logger.warning("盤後：今日 idx_bars 重試後仍未取得，繼續推送不依賴 K 線的區塊")
 
     prev_close: Optional[float] = None
     if len(idx_bars) >= 2:
@@ -441,15 +440,18 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
     except Exception as e:
         logger.exception("產生 HTML 失敗：%s", e)
 
-    stale_notice = ""
+    stale_notice_parts = []
+    if finmind_stale_notice:
+        stale_notice_parts.append(finmind_stale_notice)
     if twse_data_stale:
-        stale_notice = (
+        stale_notice_parts.append(
             f"⏳ 台股盤後｜TWSE OpenAPI 當日資料尚未公布\n\n"
             f"{today.isoformat()} 的指數／個股 OpenAPI（更新時點約 17:00～17:30）"
             f"截止 {settings.tw_postmarket_twse_deadline_hour:02d}:00 仍指向上一交易日，"
             f"本次盤後大盤／產業熱力圖略過。\n"
             f"事件列管、明日預告、重大訊息、保證金調整仍會推送。"
         )
+    stale_notice = "\n\n".join(stale_notice_parts)
 
     pushed = False
     if settings.tw_push_mode == "visual":
@@ -477,6 +479,13 @@ def run_postmarket(settings: Settings, *, force: bool = False) -> None:
         )
         if not notifier.push_text_chunks(body):
             logger.error("盤後總結 LINE 發送失敗（文字 fallback）")
+        # 文字 fallback 路徑：重大訊息與保證金調整仍要補送
+        if material_news_txt:
+            if not notifier.push_text_chunks(material_news_txt):
+                logger.error("盤後重大訊息（fallback）發送失敗")
+        if margin_txt:
+            if not notifier.push_text_chunks(margin_txt):
+                logger.error("盤後保證金調整（fallback）發送失敗")
 
 
 def _push_visual(
